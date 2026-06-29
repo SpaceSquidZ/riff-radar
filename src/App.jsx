@@ -1,15 +1,11 @@
 import { useState } from 'react';
-
-// Week 2 test moment, per the roadmap: hard-code one opening message
-// to confirm Groove responds with the correct 3-rec structure.
-const TEST_MOMENT = "I love the vocal stack at 3:20 in Superposition by Daniel Caesar";
+import MomentForm from './MomentForm';
 
 function App() {
-  const [messages, setMessages] = useState([
-    { role: 'user', content: TEST_MOMENT },
-  ]);
+  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [momentSubmitted, setMomentSubmitted] = useState(false);
 
   async function sendMessage(newMessages) {
     setLoading(true);
@@ -28,6 +24,13 @@ function App() {
     }
   }
 
+  function handleMomentSubmit(moment) {
+    setMomentSubmitted(true);
+    const newMessages = [{ role: 'user', content: moment.formattedMessage }];
+    setMessages(newMessages);
+    sendMessage(newMessages);
+  }
+
   function handleSend() {
     if (!input.trim()) return;
     const newMessages = [...messages, { role: 'user', content: input }];
@@ -36,34 +39,31 @@ function App() {
     sendMessage(newMessages);
   }
 
-  // Send the hard-coded test moment on first load.
-  const [hasSentInitial, setHasSentInitial] = useState(false);
-  if (!hasSentInitial) {
-    setHasSentInitial(true);
-    sendMessage(messages);
-  }
-
   return (
     <div>
-      <h1>Riff Radar — Groove chat (test)</h1>
+      <h1>Riff Radar</h1>
 
-      <div>
-        {messages.map((msg, i) => (
-          <p key={i}>
-            <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong> {msg.content}
-          </p>
-        ))}
-        {loading && <p>Groove is thinking...</p>}
-      </div>
+      {!momentSubmitted && <MomentForm onSubmit={handleMomentSubmit} />}
 
-      <input
-        type="text"
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-        placeholder="Type a message..."
-      />
-      <button onClick={handleSend}>Send</button>
+      {momentSubmitted && (
+        <div>
+          {messages.map((msg, i) => (
+            <p key={i}>
+              <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong> {msg.content}
+            </p>
+          ))}
+          {loading && <p>Groove is thinking...</p>}
+
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+            placeholder="Type a message..."
+          />
+          <button onClick={handleSend}>Send</button>
+        </div>
+      )}
     </div>
   );
 }
