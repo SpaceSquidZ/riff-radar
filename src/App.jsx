@@ -1,14 +1,28 @@
 import { useState } from 'react';
 import MomentForm from './MomentForm';
 
+const LOADING_MESSAGES = [
+  'Flipping through the shelf...',
+  'Pulling a few records...',
+  'Digging through the stacks...',
+  'Cueing something up...',
+  'Scanning the crates...',
+];
+
+function getRandomLoadingMessage() {
+  return LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)];
+}
+
 function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('');
   const [momentSubmitted, setMomentSubmitted] = useState(false);
 
   async function sendMessage(newMessages) {
     setLoading(true);
+    setLoadingMessage(getRandomLoadingMessage());
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -52,7 +66,7 @@ function App() {
               <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong> {msg.content}
             </p>
           ))}
-          {loading && <p>Groove is thinking...</p>}
+          {loading && <p>{loadingMessage}</p>}
 
           <input
             type="text"
