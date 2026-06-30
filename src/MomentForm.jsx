@@ -102,14 +102,6 @@ export default function MomentForm({ onSubmit }) {
         {/* Left column: YouTube picker. Always the same single instance,
             regardless of videoLoaded — only its surrounding layout changes. */}
         <div style={{ flex: '1 1 50%' }}>
-          {!videoLoaded && (
-            <div>
-              <h3 style={{ margin: '0 0 4px 0' }}>Watch this with me</h3>
-              <p style={{ fontSize: '0.85em', opacity: 0.7, margin: '0 0 12px 0' }}>
-                Paste a video and find your moment together. I'll be right here.
-              </p>
-            </div>
-          )}
           <YouTubeMomentPicker
             onTimestampCaptured={setTimestamp}
             onTitleGuessed={handleTitleGuessed}
