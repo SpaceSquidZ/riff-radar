@@ -43,11 +43,11 @@ export default function YouTubeMomentPicker({ onTimestampCaptured }) {
   const [startMark, setStartMark] = useState(null);
   const [endMark, setEndMark] = useState(null);
   const playerRef = useRef(null);
-  const playerContainerRef = useRef(null);
 
   function handleLoadVideo(e) {
     e.preventDefault();
     const id = extractVideoId(url.trim());
+    console.log('Extracted video ID:', id, 'from URL:', url.trim());
     if (!id) {
       setError('Could not find a video in that URL. Paste a full YouTube link.');
       return;
@@ -59,19 +59,42 @@ export default function YouTubeMomentPicker({ onTimestampCaptured }) {
   }
 
   // Create the player once we have a videoId and the API is ready.
+  // We target a fixed DOM id (not a React ref) because the YouTube API's
+  // own documentation recommends this — it avoids a timing issue where
+  // the ref might not yet be attached to the DOM when the API resolves.
   useEffect(() => {
     if (!videoId) return;
 
     let player;
-    loadYouTubeApi().then(() => {
-      player = new window.YT.Player(playerContainerRef.current, {
-        videoId,
-        playerVars: { rel: 0 },
+    let cancelled = false;
+
+    loadYouTubeApi()
+      .then(() => {
+        if (cancelled) return;
+        try {
+          player = new window.YT.Player('youtube-player-container', {
+            videoId,
+            playerVars: { rel: 0 },
+            events: {
+              onError: (e) => {
+                console.error('YouTube player error:', e);
+                setError('This video could not be loaded. It may be restricted from embedding.');
+              },
+            },
+          });
+          playerRef.current = player;
+        } catch (err) {
+          console.error('Failed to create YouTube player:', err);
+          setError('Something went wrong loading the video player.');
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load YouTube IFrame API:', err);
+        setError('Could not load the YouTube player. Check your connection and try again.');
       });
-      playerRef.current = player;
-    });
 
     return () => {
+      cancelled = true;
       if (player && player.destroy) player.destroy();
     };
   }, [videoId]);
@@ -128,7 +151,7 @@ export default function YouTubeMomentPicker({ onTimestampCaptured }) {
 
       {videoId && (
         <div>
-          <div ref={playerContainerRef}></div>
+          <div id="youtube-player-container"></div>
 
           <button type="button" onClick={markStart}>
             Mark start {startMark !== null && `(${secondsToTimestamp(startMark)})`}
