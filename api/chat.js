@@ -4,12 +4,17 @@
 // calls the Claude API with Groove's system prompt (base + lore addendum),
 // and returns Groove's response.
 //
+// Also logs message_sent (for the user's incoming message) and
+// rec_generated (if Groove's reply contains recommendation links) to
+// Supabase, per Week 4's instrumentation plan.
+//
 // Prompt caching: the large, static GROOVE_BASE_PROMPT is marked as a cache
 // breakpoint so Claude only pays full input-token cost on the first call;
 // repeated calls within the cache TTL reuse it at a steep discount. The
 // per-user lore addendum is appended separately, uncached, since it varies.
 
 import { GROOVE_BASE_PROMPT, getLoreAddendum } from '../src/groovePrompt.js';
+import { logEvent } from '../src/supabaseClient.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -17,10 +22,20 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { messages, sessionCount = 0 } = req.body;
+    const { messages, sessionCount = 0, sessionId } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'messages array is required' });
+    }
+
+    // Log the user's incoming message (the last one in the array, since
+    // the frontend sends the full history with the new message appended).
+    const lastUserMessage = messages[messages.length - 1];
+    if (sessionId && lastUserMessage?.role === 'user') {
+      logEvent(sessionId, 'message_sent', {
+        role: 'user',
+        content_length: lastUserMessage.content.length,
+      });
     }
 
     const loreAddendum = getLoreAddendum(sessionCount);
@@ -59,12 +74,28 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
-    // data.content is an array of blocks; for a plain text reply this is
-    // typically a single block, but we join defensively in case of multiple.
     const replyText = data.content
       .filter((block) => block.type === 'text')
       .map((block) => block.text)
       .join('\n');
+
+    // Log the assistant's reply, and separately log rec_generated if the
+    // reply contains recommendation links (a rough heuristic: looks for
+    // the Spotify search link format Groove is instructed to produce).
+    if (sessionId) {
+      logEvent(sessionId, 'message_sent', {
+        role: 'assistant',
+        content_length: replyText.length,
+      });
+
+      const spotifyLinkPattern = /open\.spotify\.com\/search\/([^\)]+)/g;
+      const matches = [...replyText.matchAll(spotifyLinkPattern)];
+      if (matches.length > 0) {
+        logEvent(sessionId, 'rec_generated', {
+          recommendation_count: matches.length,
+        });
+      }
+    }
 
     return res.status(200).json({ reply: replyText });
   } catch (err) {

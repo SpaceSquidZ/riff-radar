@@ -1,6 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import MomentForm from './MomentForm';
+import MessageContent from './MessageContent';
+import { getSessionId } from './sessionId';
+import { logEvent } from './supabaseClient';
 
+// In-character loading messages, shown while waiting on Groove's response.
+// Picked randomly per request rather than reused every time.
 const LOADING_MESSAGES = [
   'Flipping through the shelf...',
   'Pulling a few records...',
@@ -20,14 +25,21 @@ function App() {
   const [loadingMessage, setLoadingMessage] = useState('');
   const [momentSubmitted, setMomentSubmitted] = useState(false);
 
+  // Log session_start exactly once, when the app first mounts.
+  useEffect(() => {
+    const sessionId = getSessionId();
+    logEvent(sessionId, 'session_start');
+  }, []);
+
   async function sendMessage(newMessages) {
     setLoading(true);
     setLoadingMessage(getRandomLoadingMessage());
     try {
+      const sessionId = getSessionId();
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: newMessages, sessionCount: 0 }),
+        body: JSON.stringify({ messages: newMessages, sessionCount: 0, sessionId }),
       });
       const data = await response.json();
       setMessages([...newMessages, { role: 'assistant', content: data.reply }]);
@@ -62,9 +74,10 @@ function App() {
       {momentSubmitted && (
         <div>
           {messages.map((msg, i) => (
-            <p key={i}>
-              <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong> {msg.content}
-            </p>
+            <div key={i}>
+              <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong>
+              <MessageContent content={msg.content} />
+            </div>
           ))}
           {loading && <p>{loadingMessage}</p>}
 
