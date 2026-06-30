@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import YouTubeMomentPicker from './YouTubeMomentPicker';
 
 // A pool of example moments spanning genres, from iconic to indie.
 // One is picked at random each time the form loads, so the placeholder
@@ -21,6 +22,8 @@ function getRandomExample() {
   return EXAMPLE_MOMENTS[Math.floor(Math.random() * EXAMPLE_MOMENTS.length)];
 }
 
+// Validates a single mm:ss timestamp (e.g. "3:20") or a range
+// like "2:15-2:45" / "2:15 - 2:45".
 function isValidTimestamp(value) {
   const trimmed = value.trim();
   const single = /^\d{1,2}:\d{2}$/;
@@ -29,6 +32,8 @@ function isValidTimestamp(value) {
 }
 
 export default function MomentForm({ onSubmit }) {
+  // Picked once per form mount, not on every render, so the placeholder
+  // doesn't change while someone is still typing.
   const [example] = useState(getRandomExample);
 
   const [song, setSong] = useState('');
@@ -71,22 +76,48 @@ export default function MomentForm({ onSubmit }) {
 
       <div>
         <label htmlFor="song">Song title</label>
-        <input id="song" type="text" value={song} onChange={(e) => setSong(e.target.value)} placeholder={example.song} />
+        <input
+          id="song"
+          type="text"
+          value={song}
+          onChange={(e) => setSong(e.target.value)}
+          placeholder={example.song}
+        />
       </div>
 
       <div>
         <label htmlFor="artist">Artist</label>
-        <input id="artist" type="text" value={artist} onChange={(e) => setArtist(e.target.value)} placeholder={example.artist} />
+        <input
+          id="artist"
+          type="text"
+          value={artist}
+          onChange={(e) => setArtist(e.target.value)}
+          placeholder={example.artist}
+        />
       </div>
 
       <div>
         <label htmlFor="timestamp">Timestamp (mm:ss, or a range like 2:15-2:45)</label>
-        <input id="timestamp" type="text" value={timestamp} onChange={(e) => setTimestamp(e.target.value)} placeholder={example.timestamp} />
+        <input
+          id="timestamp"
+          type="text"
+          value={timestamp}
+          onChange={(e) => setTimestamp(e.target.value)}
+          placeholder={example.timestamp}
+        />
       </div>
+
+      <YouTubeMomentPicker onTimestampCaptured={setTimestamp} />
 
       <div>
         <label htmlFor="whatCaughtYou">What caught you?</label>
-        <input id="whatCaughtYou" type="text" value={whatCaughtYou} onChange={(e) => setWhatCaughtYou(e.target.value)} placeholder={example.whatCaughtYou} />
+        <input
+          id="whatCaughtYou"
+          type="text"
+          value={whatCaughtYou}
+          onChange={(e) => setWhatCaughtYou(e.target.value)}
+          placeholder={example.whatCaughtYou}
+        />
       </div>
 
       {error && <p>{error}</p>}
