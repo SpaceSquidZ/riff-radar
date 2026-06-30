@@ -44,8 +44,7 @@ export default function YouTubeMomentPicker({ onTimestampCaptured }) {
   const [endMark, setEndMark] = useState(null);
   const playerRef = useRef(null);
 
-  function handleLoadVideo(e) {
-    e.preventDefault();
+  function handleLoadVideo() {
     const id = extractVideoId(url.trim());
     console.log('Extracted video ID:', id, 'from URL:', url.trim());
     if (!id) {
@@ -136,15 +135,16 @@ export default function YouTubeMomentPicker({ onTimestampCaptured }) {
       <h3>Or scrub a YouTube video to find your moment</h3>
 
       {!videoId && (
-        <form onSubmit={handleLoadVideo}>
+        <div>
           <input
             type="text"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleLoadVideo()}
             placeholder="Paste a YouTube link"
           />
-          <button type="submit">Load video</button>
-        </form>
+          <button type="button" onClick={handleLoadVideo}>Load video</button>
+        </div>
       )}
 
       {error && <p>{error}</p>}
