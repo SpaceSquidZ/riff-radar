@@ -6,12 +6,27 @@ import { logEvent } from './supabaseClient';
 // instead of raw text. Links get a custom click handler that logs an
 // outbound_click event before letting the browser navigate normally.
 
+// Extracts a clean track name from a Spotify search URL.
+// e.g. "https://open.spotify.com/search/In%20My%20Room%20Frank%20Ocean"
+// becomes "In My Room Frank Ocean"
+function extractTrackFromUrl(href) {
+  try {
+    const url = new URL(href);
+    if (url.hostname === 'open.spotify.com') {
+      const parts = url.pathname.split('/search/');
+      if (parts[1]) return decodeURIComponent(parts[1].replace(/%20/g, ' '));
+    }
+  } catch {
+    // malformed URL — fall through to returning the raw href
+  }
+  return href;
+}
+
 function handleLinkClick(href) {
   const sessionId = getSessionId();
   const service = href.includes('spotify') ? 'spotify' : 'apple_music';
-  logEvent(sessionId, 'outbound_click', { service, url: href });
-  // Don't preventDefault — let the link open normally in a new context.
-  // Logging happens "fire and forget" alongside the navigation.
+  const track = extractTrackFromUrl(href);
+  logEvent(sessionId, 'outbound_click', { service, track, url: href });
 }
 
 export default function MessageContent({ content }) {

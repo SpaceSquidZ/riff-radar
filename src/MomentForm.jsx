@@ -1,5 +1,8 @@
 import { useState } from 'react';
+import { franc } from 'franc';
 import YouTubeMomentPicker from './YouTubeMomentPicker';
+import { getSessionId } from './sessionId';
+import { logEvent } from './supabaseClient';
 
 // A pool of example moments spanning genres, from iconic to indie.
 // One is picked at random each time the form loads, so the placeholder
@@ -29,6 +32,16 @@ function isValidTimestamp(value) {
   const single = /^\d{1,2}:\d{2}$/;
   const range = /^\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}$/;
   return single.test(trimmed) || range.test(trimmed);
+}
+
+// Detects language from the user's "what caught you" text using franc.
+// Returns an ISO 639-3 code (e.g. "cmn", "jpn", "eng") or null if the
+// text is too short or the detection result is "und" (undefined/uncertain).
+// We treat uncertain results as null rather than risk passing a wrong code.
+function detectLanguage(text) {
+  if (!text || text.trim().length < 10) return null;
+  const result = franc(text.trim());
+  return result === 'und' ? null : result;
 }
 
 export default function MomentForm({ onSubmit }) {
@@ -80,6 +93,22 @@ export default function MomentForm({ onSubmit }) {
 
     setError('');
 
+    // Detect language from the user's description before submitting.
+    const detectedLanguage = detectLanguage(whatCaughtYou);
+
+    // Log the moment submission — song/artist/timestamp/input_method/language.
+    // We deliberately do NOT log the "what caught you" text itself since
+    // that is the user's own personal expression and the most sensitive
+    // field in the data model.
+    const sessionId = getSessionId();
+    logEvent(sessionId, 'moment_submitted', {
+      song: song.trim(),
+      artist: artist.trim(),
+      timestamp: timestamp.trim(),
+      input_method: videoLoaded ? 'youtube' : 'manual',
+      language: detectedLanguage,
+    });
+
     const formattedMessage =
       `I'm listening to ${song.trim()} by ${artist.trim()}. ` +
       `At ${timestamp.trim()}, ${whatCaughtYou.trim()} ` +
@@ -91,6 +120,7 @@ export default function MomentForm({ onSubmit }) {
       timestamp: timestamp.trim(),
       whatCaughtYou: whatCaughtYou.trim(),
       formattedMessage,
+      detectedLanguage,
     });
   }
 
@@ -102,6 +132,14 @@ export default function MomentForm({ onSubmit }) {
         {/* Left column: YouTube picker. Always the same single instance,
             regardless of videoLoaded — only its surrounding layout changes. */}
         <div style={{ flex: '1 1 50%' }}>
+          {!videoLoaded && (
+            <div>
+              <h3 style={{ margin: '0 0 4px 0' }}>Watch this with me</h3>
+              <p style={{ fontSize: '0.85em', opacity: 0.7, margin: '0 0 12px 0' }}>
+                Paste a video and find your moment together. I'll be right here.
+              </p>
+            </div>
+          )}
           <YouTubeMomentPicker
             onTimestampCaptured={setTimestamp}
             onTitleGuessed={handleTitleGuessed}

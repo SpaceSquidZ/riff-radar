@@ -1,20 +1,23 @@
 // api/chat.js
 //
-// Vercel serverless function. Takes a conversation history + new user message,
-// calls the Claude API with Groove's system prompt (base + lore addendum),
-// and returns Groove's response.
+// Vercel serverless function. Takes a conversation history + session metadata,
+// calls the Claude API with Groove's system prompt, and returns Groove's reply.
 //
-// Also logs message_sent (for the user's incoming message) and
-// rec_generated (if Groove's reply contains recommendation links) to
-// Supabase, per Week 4's instrumentation plan.
-//
-// Prompt caching: the large, static GROOVE_BASE_PROMPT is marked as a cache
-// breakpoint so Claude only pays full input-token cost on the first call;
-// repeated calls within the cache TTL reuse it at a steep discount. The
-// per-user lore addendum is appended separately, uncached, since it varies.
+// Logs four event types to Supabase:
+//   message_sent  — user and assistant messages (content_length, not content)
+//   rec_generated — when Groove returns recommendations (with track titles)
 
 import { GROOVE_BASE_PROMPT, getLoreAddendum } from '../src/groovePrompt.js';
 import { logEvent } from '../src/supabaseClient.js';
+
+// Parses track titles from Groove's markdown-formatted response.
+// Looks for the Spotify search link format and extracts the query string,
+// which Groove is instructed to format as "Track%20Name%20Artist".
+function parseTracksFromReply(replyText) {
+  const pattern = /open\.spotify\.com\/search\/([^\)"\s]+)/g;
+  const matches = [...replyText.matchAll(pattern)];
+  return matches.map((m) => decodeURIComponent(m[1].replace(/%20/g, ' ')));
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -28,8 +31,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'messages array is required' });
     }
 
-    // Log the user's incoming message (the last one in the array, since
-    // the frontend sends the full history with the new message appended).
+    // Log the user's incoming message (the last one in the array).
     const lastUserMessage = messages[messages.length - 1];
     if (sessionId && lastUserMessage?.role === 'user') {
       logEvent(sessionId, 'message_sent', {
@@ -54,12 +56,11 @@ export default async function handler(req, res) {
           {
             type: 'text',
             text: GROOVE_BASE_PROMPT,
-            cache_control: { type: 'ephemeral' }, // cache breakpoint — static across all calls
+            cache_control: { type: 'ephemeral' },
           },
           {
             type: 'text',
             text: loreAddendum || '(No lore addendum active yet — this is a new user.)',
-            // intentionally NOT cached: this changes per-user / per-session-count
           },
         ],
         messages: messages,
@@ -79,20 +80,20 @@ export default async function handler(req, res) {
       .map((block) => block.text)
       .join('\n');
 
-    // Log the assistant's reply, and separately log rec_generated if the
-    // reply contains recommendation links (a rough heuristic: looks for
-    // the Spotify search link format Groove is instructed to produce).
+    // Log the assistant's reply.
     if (sessionId) {
       logEvent(sessionId, 'message_sent', {
         role: 'assistant',
         content_length: replyText.length,
       });
 
-      const spotifyLinkPattern = /open\.spotify\.com\/search\/([^\)]+)/g;
-      const matches = [...replyText.matchAll(spotifyLinkPattern)];
-      if (matches.length > 0) {
+      // If the reply contains recommendation links, log rec_generated with
+      // the actual track titles so we can see what Groove is recommending.
+      const tracks = parseTracksFromReply(replyText);
+      if (tracks.length > 0) {
         logEvent(sessionId, 'rec_generated', {
-          recommendation_count: matches.length,
+          recommendation_count: tracks.length,
+          tracks,
         });
       }
     }
