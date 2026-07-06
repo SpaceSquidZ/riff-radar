@@ -108,10 +108,14 @@ export default function App() {
           alignItems: 'flex-start',
         }}>
           {/* Left column: YouTube picker — always in the DOM once videoLoaded,
-              hidden entirely before a video is loaded in chat phase */}
+              hidden entirely before a video is loaded in chat phase.
+              position: sticky keeps the video visible while chat scrolls. */}
           <div style={{
-            flex: '1 1 45%',
+            flex: '0 0 420px',
             display: (phase === 'chat' && !videoLoaded) ? 'none' : 'block',
+            position: 'sticky',
+            top: '1.5rem',
+            alignSelf: 'flex-start',
           }}>
             <YouTubeMomentPicker
               onTimestampCaptured={setYoutubeTimestamp}
@@ -127,7 +131,7 @@ export default function App() {
           </div>
 
           {/* Right column: form or chat depending on phase */}
-          <div style={{ flex: '1 1 55%' }}>
+          <div style={{ flex: '1 1 0', minWidth: 0 }}>
             {phase === 'form' && (
               <>
                 {!videoLoaded && (
