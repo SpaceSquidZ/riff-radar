@@ -4,6 +4,7 @@ import ConsentBanner, { hasSeenConsent } from './ConsentBanner';
 import MomentForm from './MomentForm';
 import MessageContent from './MessageContent';
 import YouTubeMomentPicker from './YouTubeMomentPicker';
+import RecommendationCard from './RecommendationCard';
 import { getSessionId } from './sessionId';
 import { logEvent } from './supabaseClient';
 
@@ -59,9 +60,16 @@ export default function App() {
         body: JSON.stringify({ messages: newMessages, sessionCount: 0, sessionId }),
       });
       const data = await response.json();
-      setMessages([...newMessages, { role: 'assistant', content: data.reply }]);
+      // data.recs (added in Week 5) is an array of iTunes-enriched recs,
+      // or [] if this reply had no recommendations. Attached directly to
+      // the assistant message so it renders alongside that specific reply,
+      // not as separate global state.
+      setMessages([
+        ...newMessages,
+        { role: 'assistant', content: data.reply, recs: data.recs || [] },
+      ]);
     } catch (err) {
-      setMessages([...newMessages, { role: 'assistant', content: 'Error: ' + err.message }]);
+      setMessages([...newMessages, { role: 'assistant', content: 'Error: ' + err.message, recs: [] }]);
     } finally {
       setLoading(false);
     }
@@ -80,6 +88,19 @@ export default function App() {
     setMessages(newMessages);
     setInput('');
     sendMessage(newMessages);
+  }
+
+  // preview_played and outbound_click handlers, passed down to every
+  // RecommendationCard. Both log to the same events table as everything
+  // else (PRD Section 8 instrumentation plan).
+  function handlePreviewPlayed({ track, artist }) {
+    const sessionId = getSessionId();
+    logEvent(sessionId, 'preview_played', { track, artist });
+  }
+
+  function handleOutboundClick({ track, artist, service, url }) {
+    const sessionId = getSessionId();
+    logEvent(sessionId, 'outbound_click', { track, artist, service, url });
   }
 
   // Landing screen — shown once per phase milestone.
@@ -157,6 +178,21 @@ export default function App() {
                   <div key={i} style={{ marginBottom: '1rem' }}>
                     <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong>
                     <MessageContent content={msg.content} />
+
+                    {/* Recs only exist on assistant messages, and only when
+                        that reply actually contained recommendations. */}
+                    {msg.role === 'assistant' && msg.recs && msg.recs.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+                        {msg.recs.map((rec, j) => (
+                          <RecommendationCard
+                            key={`${i}-${j}`}
+                            rec={rec}
+                            onPreviewPlayed={handlePreviewPlayed}
+                            onOutboundClick={handleOutboundClick}
+                          />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
                 {loading && <p style={{ opacity: 0.6 }}>{loadingMessage}</p>}
