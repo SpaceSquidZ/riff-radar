@@ -94,92 +94,86 @@ export default function App() {
     );
   }
 
-  // Form and chat phases share the same two-column layout when a video
-  // is loaded: YouTube player on the left, main content on the right.
-  const youtubeColumn = (
-    <div style={{ flex: '1 1 45%' }}>
-      <YouTubeMomentPicker
-        onTimestampCaptured={setYoutubeTimestamp}
-        onTitleGuessed={setTitleGuess}
-        onVideoLoadedChange={setVideoLoaded}
-        // Hide mark controls once the user has submitted — they can
-        // still watch the video and type a new timestamp in the chat.
-        showControls={phase === 'form'}
-      />
-      {phase === 'chat' && videoLoaded && (
-        <p style={{ fontSize: '0.8em', opacity: 0.6, marginTop: '8px' }}>
-          Want to describe another moment from this video? Type it in the message box.
-        </p>
-      )}
-    </div>
-  );
-
   return (
     <>
       <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '1.5rem' }}>
         <h1>Riff Radar</h1>
 
-        {phase === 'form' && (
+        {/* YouTubeMomentPicker is rendered exactly once here, outside both
+            phase conditionals, so React never unmounts it between phases.
+            Visibility and layout are controlled via CSS, not conditional rendering. */}
+        <div style={{
+          display: 'flex',
+          gap: '24px',
+          alignItems: 'flex-start',
+        }}>
+          {/* Left column: YouTube picker — always in the DOM once videoLoaded,
+              hidden entirely before a video is loaded in chat phase */}
           <div style={{
-            display: 'flex',
-            gap: '24px',
-            alignItems: 'flex-start',
+            flex: '1 1 45%',
+            display: (phase === 'chat' && !videoLoaded) ? 'none' : 'block',
           }}>
-            {youtubeColumn}
-            <div style={{ flex: '1 1 55%' }}>
-              {!videoLoaded && (
-                <div style={{ marginBottom: '1rem' }}>
-                  <h3 style={{ margin: '0 0 4px 0' }}>Type it yourself</h3>
-                  <p style={{ fontSize: '0.85em', opacity: 0.7, margin: 0 }}>
-                    Already know the moment? Fill in the details below.
-                  </p>
-                </div>
-              )}
-              <MomentForm
-                onSubmit={handleMomentSubmit}
-                youtubeTimestamp={youtubeTimestamp}
-                videoLoaded={videoLoaded}
-                titleGuess={titleGuess}
-              />
-            </div>
+            <YouTubeMomentPicker
+              onTimestampCaptured={setYoutubeTimestamp}
+              onTitleGuessed={setTitleGuess}
+              onVideoLoadedChange={setVideoLoaded}
+              showControls={phase === 'form'}
+            />
+            {phase === 'chat' && videoLoaded && (
+              <p style={{ fontSize: '0.8em', opacity: 0.6, marginTop: '8px' }}>
+                Want to describe another moment from this video? Type it in the message box.
+              </p>
+            )}
           </div>
-        )}
 
-        {phase === 'chat' && (
-          <div style={{
-            display: 'flex',
-            gap: '24px',
-            alignItems: 'flex-start',
-          }}>
-            {/* YouTube column: only takes space if a video was loaded */}
-            {videoLoaded && youtubeColumn}
-
-            <div style={{ flex: '1 1 100%' }}>
-              {messages.map((msg, i) => (
-                <div key={i} style={{ marginBottom: '1rem' }}>
-                  <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong>
-                  <MessageContent content={msg.content} />
-                </div>
-              ))}
-              {loading && <p style={{ opacity: 0.6 }}>{loadingMessage}</p>}
-
-              <div style={{ marginTop: '1.5rem', display: 'flex', gap: '8px' }}>
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                  placeholder="Type a message..."
-                  style={{ flex: 1 }}
+          {/* Right column: form or chat depending on phase */}
+          <div style={{ flex: '1 1 55%' }}>
+            {phase === 'form' && (
+              <>
+                {!videoLoaded && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <h3 style={{ margin: '0 0 4px 0' }}>Type it yourself</h3>
+                    <p style={{ fontSize: '0.85em', opacity: 0.7, margin: 0 }}>
+                      Already know the moment? Fill in the details below.
+                    </p>
+                  </div>
+                )}
+                <MomentForm
+                  onSubmit={handleMomentSubmit}
+                  youtubeTimestamp={youtubeTimestamp}
+                  videoLoaded={videoLoaded}
+                  titleGuess={titleGuess}
                 />
-                <button onClick={handleSend}>Send</button>
+              </>
+            )}
+
+            {phase === 'chat' && (
+              <div>
+                {messages.map((msg, i) => (
+                  <div key={i} style={{ marginBottom: '1rem' }}>
+                    <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong>
+                    <MessageContent content={msg.content} />
+                  </div>
+                ))}
+                {loading && <p style={{ opacity: 0.6 }}>{loadingMessage}</p>}
+
+                <div style={{ marginTop: '1.5rem', display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                    placeholder="Type a message..."
+                    style={{ flex: 1 }}
+                  />
+                  <button onClick={handleSend}>Send</button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
-      {/* Consent banner — shown on form/chat phases if not yet accepted */}
       {showConsent && phase !== 'landing' && (
         <ConsentBanner onAccept={() => setShowConsent(false)} />
       )}
