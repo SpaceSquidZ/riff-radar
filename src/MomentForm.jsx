@@ -1,13 +1,8 @@
 import { useState } from 'react';
 import { franc } from 'franc';
-import YouTubeMomentPicker from './YouTubeMomentPicker';
 import { getSessionId } from './sessionId';
 import { logEvent } from './supabaseClient';
 
-// A pool of example moments spanning genres, from iconic to indie.
-// One is picked at random each time the form loads, so the placeholder
-// text doesn't always anchor on the same song. Purely cosmetic — these
-// are never submitted, just shown as hints.
 const EXAMPLE_MOMENTS = [
   { song: 'Superposition', artist: 'Daniel Caesar', timestamp: '3:20', whatCaughtYou: 'the vocal stack that blooms open' },
   { song: 'Redbone', artist: 'Childish Gambino', timestamp: '2:10', whatCaughtYou: 'the guitar riff that just loops and loops' },
@@ -25,8 +20,6 @@ function getRandomExample() {
   return EXAMPLE_MOMENTS[Math.floor(Math.random() * EXAMPLE_MOMENTS.length)];
 }
 
-// Validates a single mm:ss timestamp (e.g. "3:20") or a range
-// like "2:15-2:45" / "2:15 - 2:45".
 function isValidTimestamp(value) {
   const trimmed = value.trim();
   const single = /^\d{1,2}:\d{2}$/;
@@ -34,54 +27,52 @@ function isValidTimestamp(value) {
   return single.test(trimmed) || range.test(trimmed);
 }
 
-// Detects language from the user's "what caught you" text using franc.
-// Returns an ISO 639-3 code (e.g. "cmn", "jpn", "eng") or null if the
-// text is too short or the detection result is "und" (undefined/uncertain).
-// We treat uncertain results as null rather than risk passing a wrong code.
 function detectLanguage(text) {
   if (!text || text.trim().length < 10) return null;
   const result = franc(text.trim());
   return result === 'und' ? null : result;
 }
 
-export default function MomentForm({ onSubmit }) {
-  // Picked once per form mount, not on every render, so the placeholder
-  // doesn't change while someone is still typing.
+// MomentForm no longer owns YouTubeMomentPicker — the player lives in
+// App.jsx so it can survive the form-to-chat transition. This component
+// receives timestamp and title-guess callbacks from App instead.
+export default function MomentForm({
+  onSubmit,
+  // Pre-filled timestamp from the YouTube picker (controlled by App)
+  youtubeTimestamp,
+  // Whether a video is currently loaded (controls layout)
+  videoLoaded,
+  // Song/artist guess from YouTube title parsing
+  titleGuess,
+}) {
   const [example] = useState(getRandomExample);
-
   const [song, setSong] = useState('');
   const [artist, setArtist] = useState('');
   const [timestamp, setTimestamp] = useState('');
   const [whatCaughtYou, setWhatCaughtYou] = useState('');
   const [error, setError] = useState('');
-
-  // True once a YouTube video has been loaded. The picker itself is always
-  // mounted (never destroyed/recreated), so this only ever changes layout,
-  // never resets the picker's internal video state.
-  const [videoLoaded, setVideoLoaded] = useState(false);
-
-  // True if song/artist were just auto-filled from a YouTube title guess
-  // and haven't been touched by the user yet — used to show a visible
-  // "double check this" treatment rather than presenting a guess as fact.
   const [songIsGuess, setSongIsGuess] = useState(false);
   const [artistIsGuess, setArtistIsGuess] = useState(false);
 
-  function handleTitleGuessed({ artist: guessedArtist, song: guessedSong }) {
-    // Only fill fields the user hasn't already typed something into,
-    // so we never silently overwrite something they entered themselves.
-    if (!song.trim()) {
-      setSong(guessedSong);
-      setSongIsGuess(true);
-    }
-    if (!artist.trim()) {
-      setArtist(guessedArtist);
-      setArtistIsGuess(true);
-    }
+  // Sync YouTube-captured timestamp into the local field.
+  // Using a ref pattern to avoid infinite loops from the prop changing.
+  const prevYoutubeTimestamp = useState(null);
+  if (youtubeTimestamp && youtubeTimestamp !== prevYoutubeTimestamp[0]) {
+    prevYoutubeTimestamp[1](youtubeTimestamp);
+    setTimestamp(youtubeTimestamp);
+  }
+
+  // Sync title guess from YouTube into song/artist fields,
+  // but only if the user hasn't already typed something there.
+  const prevTitleGuess = useState(null);
+  if (titleGuess && titleGuess !== prevTitleGuess[0]) {
+    prevTitleGuess[1](titleGuess);
+    if (!song.trim()) { setSong(titleGuess.song); setSongIsGuess(true); }
+    if (!artist.trim()) { setArtist(titleGuess.artist); setArtistIsGuess(true); }
   }
 
   function handleSubmit(e) {
     e.preventDefault();
-
     if (!song.trim() || !artist.trim() || !timestamp.trim() || !whatCaughtYou.trim()) {
       setError('All fields are required.');
       return;
@@ -90,16 +81,9 @@ export default function MomentForm({ onSubmit }) {
       setError('Timestamp should be mm:ss (like 3:20) or a range (like 2:15-2:45).');
       return;
     }
-
     setError('');
 
-    // Detect language from the user's description before submitting.
     const detectedLanguage = detectLanguage(whatCaughtYou);
-
-    // Log the moment submission — song/artist/timestamp/input_method/language.
-    // We deliberately do NOT log the "what caught you" text itself since
-    // that is the user's own personal expression and the most sensitive
-    // field in the data model.
     const sessionId = getSessionId();
     logEvent(sessionId, 'moment_submitted', {
       song: song.trim(),
@@ -128,99 +112,60 @@ export default function MomentForm({ onSubmit }) {
     <form onSubmit={handleSubmit}>
       <h2>Describe a moment</h2>
 
-      <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
-        {/* Left column: YouTube picker. Always the same single instance,
-            regardless of videoLoaded — only its surrounding layout changes. */}
-        <div style={{ flex: '1 1 50%' }}>
-          {!videoLoaded && (
-            <div>
-              <h3 style={{ margin: '0 0 4px 0' }}>Watch this with me</h3>
-              <p style={{ fontSize: '0.85em', opacity: 0.7, margin: '0 0 12px 0' }}>
-                Paste a video and find your moment together. I'll be right here.
-              </p>
-            </div>
-          )}
-          <YouTubeMomentPicker
-            onTimestampCaptured={setTimestamp}
-            onTitleGuessed={handleTitleGuessed}
-            onVideoLoadedChange={setVideoLoaded}
-          />
-        </div>
-
-        {/* Right column: manual fields. Always on the right, never swaps sides. */}
-        <div style={{ flex: '1 1 50%' }}>
-          {!videoLoaded && (
-            <div>
-              <h3 style={{ margin: '0 0 4px 0' }}>Type it yourself</h3>
-              <p style={{ fontSize: '0.85em', opacity: 0.7, margin: '0 0 12px 0' }}>
-                Already know the moment? Fill in the details below.
-              </p>
-            </div>
-          )}
-
-          <div>
-            <label htmlFor="song">
-              Song title {songIsGuess && <span>(from the video title, double check this)</span>}
-            </label>
-            <input
-              id="song"
-              type="text"
-              value={song}
-              onChange={(e) => {
-                setSong(e.target.value);
-                setSongIsGuess(false);
-              }}
-              placeholder={example.song}
-            />
-          </div>
-
-          <div>
-            <label htmlFor="artist">
-              Artist {artistIsGuess && <span>(from the video title, double check this)</span>}
-            </label>
-            <input
-              id="artist"
-              type="text"
-              value={artist}
-              onChange={(e) => {
-                setArtist(e.target.value);
-                setArtistIsGuess(false);
-              }}
-              placeholder={example.artist}
-            />
-          </div>
-
-          <div>
-            <label htmlFor="timestamp">Timestamp (mm:ss, or a range like 2:15-2:45)</label>
-            <input
-              id="timestamp"
-              type="text"
-              value={timestamp}
-              onChange={(e) => setTimestamp(e.target.value)}
-              placeholder={example.timestamp}
-            />
-          </div>
-
-          <div>
-            <label htmlFor="whatCaughtYou">What caught you?</label>
-            <p style={{ fontSize: '0.85em', opacity: 0.7, margin: '4px 0 8px 0' }}>
-              Take your time. The more specific, the more interesting where this goes.
-            </p>
-            <textarea
-              id="whatCaughtYou"
-              rows={6}
-              style={{ width: '100%', minHeight: '120px', padding: '12px', boxSizing: 'border-box' }}
-              value={whatCaughtYou}
-              onChange={(e) => setWhatCaughtYou(e.target.value)}
-              placeholder={example.whatCaughtYou}
-            />
-          </div>
-
-          {error && <p>{error}</p>}
-
-          <button type="submit">Find me music like this</button>
-        </div>
+      <div>
+        <label htmlFor="song">
+          Song title {songIsGuess && <span style={{ fontSize: '0.8em', opacity: 0.6 }}>(from the video title, double check this)</span>}
+        </label>
+        <input
+          id="song"
+          type="text"
+          value={song}
+          onChange={(e) => { setSong(e.target.value); setSongIsGuess(false); }}
+          placeholder={example.song}
+        />
       </div>
+
+      <div>
+        <label htmlFor="artist">
+          Artist {artistIsGuess && <span style={{ fontSize: '0.8em', opacity: 0.6 }}>(from the video title, double check this)</span>}
+        </label>
+        <input
+          id="artist"
+          type="text"
+          value={artist}
+          onChange={(e) => { setArtist(e.target.value); setArtistIsGuess(false); }}
+          placeholder={example.artist}
+        />
+      </div>
+
+      <div>
+        <label htmlFor="timestamp">Timestamp (mm:ss, or a range like 2:15-2:45)</label>
+        <input
+          id="timestamp"
+          type="text"
+          value={timestamp}
+          onChange={(e) => setTimestamp(e.target.value)}
+          placeholder={example.timestamp}
+        />
+      </div>
+
+      <div>
+        <label htmlFor="whatCaughtYou">What caught you?</label>
+        <p style={{ fontSize: '0.85em', opacity: 0.7, margin: '4px 0 8px 0' }}>
+          Take your time. The more specific, the more interesting where this goes.
+        </p>
+        <textarea
+          id="whatCaughtYou"
+          rows={6}
+          style={{ width: '100%', minHeight: '120px', padding: '12px', boxSizing: 'border-box' }}
+          value={whatCaughtYou}
+          onChange={(e) => setWhatCaughtYou(e.target.value)}
+          placeholder={example.whatCaughtYou}
+        />
+      </div>
+
+      {error && <p style={{ color: 'red' }}>{error}</p>}
+      <button type="submit">Find me music like this</button>
     </form>
   );
 }

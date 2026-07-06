@@ -1,7 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
 
-// Extracts an 11-character YouTube video ID from common URL formats:
-// youtube.com/watch?v=ID, youtu.be/ID, youtube.com/embed/ID
 function extractVideoId(url) {
   const patterns = [
     /(?:youtube\.com\/watch\?v=)([\w-]{11})/,
@@ -21,38 +19,27 @@ function secondsToTimestamp(totalSeconds) {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-// Best-effort guess at {artist, song} from a YouTube video title.
-// This is intentionally a guess, never trusted silently — the caller
-// is expected to show it as an editable, verifiable suggestion, not
-// a fact. Most music uploads follow "Artist - Song" or "Song - Artist",
-// often with extra clutter like "(Official Video)" that we strip first.
 function guessArtistAndSongFromTitle(rawTitle) {
   if (!rawTitle) return null;
-
   let cleaned = rawTitle
     .replace(/\(.*?(official|video|audio|lyrics?|visualizer|hd|4k).*?\)/gi, '')
     .replace(/\[.*?(official|video|audio|lyrics?|visualizer|hd|4k).*?\]/gi, '')
     .replace(/\s*-\s*topic\s*$/i, '')
     .trim();
-
   const separators = [' - ', ' \u2013 ', ' \u2014 ', ' | '];
   for (const sep of separators) {
     if (cleaned.includes(sep)) {
       const [first, second] = cleaned.split(sep);
-      if (first && second) {
-        return { artist: first.trim(), song: second.trim() };
-      }
+      if (first && second) return { artist: first.trim(), song: second.trim() };
     }
   }
   return null;
 }
 
-// Loads the YouTube IFrame API script once, shared across mounts.
 let apiLoadPromise = null;
 function loadYouTubeApi() {
   if (window.YT && window.YT.Player) return Promise.resolve();
   if (apiLoadPromise) return apiLoadPromise;
-
   apiLoadPromise = new Promise((resolve) => {
     const tag = document.createElement('script');
     tag.src = 'https://www.youtube.com/iframe_api';
@@ -62,7 +49,14 @@ function loadYouTubeApi() {
   return apiLoadPromise;
 }
 
-export default function YouTubeMomentPicker({ onTimestampCaptured, onTitleGuessed, onVideoLoadedChange }) {
+export default function YouTubeMomentPicker({
+  onTimestampCaptured,
+  onTitleGuessed,
+  onVideoLoadedChange,
+  // showControls: false hides the mark/use buttons (post-submission mode
+  // where the video stays visible but marking is no longer the primary action)
+  showControls = true,
+}) {
   const [url, setUrl] = useState('');
   const [videoId, setVideoId] = useState(null);
   const [error, setError] = useState('');
@@ -83,13 +77,22 @@ export default function YouTubeMomentPicker({ onTimestampCaptured, onTitleGuesse
     if (onVideoLoadedChange) onVideoLoadedChange(true);
   }
 
-  // Create the player once we have a videoId and the API is ready.
-  // We target a fixed DOM id (not a React ref) because the YouTube API's
-  // own documentation recommends this — it avoids a timing issue where
-  // the ref might not yet be attached to the DOM when the API resolves.
+  // Remove video — resets to the URL input state and notifies parent.
+  function handleRemoveVideo() {
+    if (playerRef.current && playerRef.current.destroy) {
+      playerRef.current.destroy();
+      playerRef.current = null;
+    }
+    setVideoId(null);
+    setUrl('');
+    setStartMark(null);
+    setEndMark(null);
+    setError('');
+    if (onVideoLoadedChange) onVideoLoadedChange(false);
+  }
+
   useEffect(() => {
     if (!videoId) return;
-
     let player;
     let cancelled = false;
 
@@ -101,33 +104,22 @@ export default function YouTubeMomentPicker({ onTimestampCaptured, onTitleGuesse
             videoId,
             playerVars: { rel: 0 },
             events: {
-              onError: (e) => {
-                console.error('YouTube player error:', e);
-                setError('This video could not be loaded. It may be restricted from embedding.');
-              },
+              onError: () => setError('This video could not be loaded. It may be restricted from embedding.'),
               onReady: (e) => {
-                // Attempt a title guess once the player has loaded video data.
                 try {
                   const data = e.target.getVideoData();
                   const guess = guessArtistAndSongFromTitle(data && data.title);
                   if (guess && onTitleGuessed) onTitleGuessed(guess);
-                } catch (err) {
-                  // Title guessing is best-effort only; failing silently here
-                  // just means the user fills song/artist in manually.
-                }
+                } catch {}
               },
             },
           });
           playerRef.current = player;
-        } catch (err) {
-          console.error('Failed to create YouTube player:', err);
+        } catch {
           setError('Something went wrong loading the video player.');
         }
       })
-      .catch((err) => {
-        console.error('Failed to load YouTube IFrame API:', err);
-        setError('Could not load the YouTube player. Check your connection and try again.');
-      });
+      .catch(() => setError('Could not load the YouTube player. Check your connection and try again.'));
 
     return () => {
       cancelled = true;
@@ -139,7 +131,6 @@ export default function YouTubeMomentPicker({ onTimestampCaptured, onTitleGuesse
     if (!playerRef.current) return;
     const time = playerRef.current.getCurrentTime();
     setStartMark(time);
-    // If an end mark already exists and is now before the new start, clear it.
     if (endMark !== null && endMark <= time) setEndMark(null);
   }
 
@@ -163,7 +154,6 @@ export default function YouTubeMomentPicker({ onTimestampCaptured, onTitleGuesse
       endMark !== null
         ? `${secondsToTimestamp(startMark)}-${secondsToTimestamp(endMark)}`
         : secondsToTimestamp(startMark);
-
     onTimestampCaptured(timestamp);
   }
 
@@ -172,7 +162,9 @@ export default function YouTubeMomentPicker({ onTimestampCaptured, onTitleGuesse
       {!videoId && (
         <div>
           <h3>Watch this with me</h3>
-          <p>Paste a video and find your moment together. I'll be right here.</p>
+          <p style={{ fontSize: '0.85em', opacity: 0.7, margin: '0 0 12px 0' }}>
+            Paste a video and find your moment together. I'll be right here.
+          </p>
           <input
             type="text"
             value={url}
@@ -184,27 +176,39 @@ export default function YouTubeMomentPicker({ onTimestampCaptured, onTitleGuesse
         </div>
       )}
 
-      {error && <p>{error}</p>}
+      {error && <p style={{ color: 'red', fontSize: '0.85em' }}>{error}</p>}
 
       {videoId && (
         <div>
           <div id="youtube-player-container"></div>
 
-          <button type="button" onClick={markStart}>
-            Mark start {startMark !== null && `(${secondsToTimestamp(startMark)})`}
-          </button>
-          <button type="button" onClick={markEnd}>
-            Mark end {endMark !== null && `(${secondsToTimestamp(endMark)})`}
+          {/* Remove video button — always visible once a video is loaded */}
+          <button
+            type="button"
+            onClick={handleRemoveVideo}
+            style={{ fontSize: '0.8em', opacity: 0.6, marginTop: '8px' }}
+          >
+            Remove video
           </button>
 
-          <p>
-            Marking just a start point captures a single instant. Marking both
-            start and end captures a range.
-          </p>
-
-          <button type="button" onClick={useThisMoment}>
-            Use this moment
-          </button>
+          {/* Mark controls — only shown in pre-submission mode */}
+          {showControls && (
+            <div style={{ marginTop: '8px' }}>
+              <button type="button" onClick={markStart}>
+                Mark start {startMark !== null && `(${secondsToTimestamp(startMark)})`}
+              </button>
+              <button type="button" onClick={markEnd}>
+                Mark end {endMark !== null && `(${secondsToTimestamp(endMark)})`}
+              </button>
+              <p style={{ fontSize: '0.8em', opacity: 0.7 }}>
+                Marking just a start point captures a single instant. Marking both
+                start and end captures a range.
+              </p>
+              <button type="button" onClick={useThisMoment}>
+                Use this moment
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
