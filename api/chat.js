@@ -68,7 +68,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-5',
-        max_tokens: 1024,
+        max_tokens: 1536,
         system: [
           {
             type: 'text',
@@ -105,6 +105,14 @@ export default async function handler(req, res) {
     }
 
     const data = await response.json();
+
+    // stop_reason 'max_tokens' means Claude got cut off mid-reply — usually
+    // shows up as a truncated sentence and a missing RIFF_RADAR_RECS block.
+    // Logging this makes a future max_tokens ceiling issue visible in Vercel
+    // logs instead of just looking like "recs silently didn't show up."
+    if (data.stop_reason === 'max_tokens') {
+      console.warn('Groove reply was truncated by max_tokens. Consider raising the limit further.');
+    }
 
     const rawReplyText = data.content
       .filter((block) => block.type === 'text')
@@ -195,7 +203,7 @@ async function retryFailedRecs({ messages, loreAddendum, failed, goodRecs }) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-5',
-        max_tokens: 1024,
+        max_tokens: 1536,
         system: [
           { type: 'text', text: GROOVE_BASE_PROMPT, cache_control: { type: 'ephemeral' } },
           { type: 'text', text: loreAddendum || '(No lore addendum active yet.)' },
