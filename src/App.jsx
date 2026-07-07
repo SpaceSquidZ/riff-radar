@@ -49,9 +49,25 @@ export default function App() {
     logEvent(sessionId, 'session_start');
   }, []);
 
+  // Appends text to (or sets recs on) the LAST message in the array.
+  // Used while a stream is actively writing into that message.
+  function updateLastMessage(updater) {
+    setMessages((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      next[next.length - 1] = updater(last);
+      return next;
+    });
+  }
+
   async function sendMessage(newMessages) {
     setLoading(true);
     setLoadingMessage(getRandomLoadingMessage());
+
+    // Placeholder assistant message that we stream text into as chunks
+    // arrive. Starts empty so nothing renders until the first delta lands.
+    setMessages([...newMessages, { role: 'assistant', content: '', recs: [] }]);
+
     try {
       const sessionId = getSessionId();
       const response = await fetch('/api/chat', {
@@ -59,17 +75,59 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: newMessages, sessionCount: 0, sessionId }),
       });
-      const data = await response.json();
-      // data.recs (added in Week 5) is an array of iTunes-enriched recs,
-      // or [] if this reply had no recommendations. Attached directly to
-      // the assistant message so it renders alongside that specific reply,
-      // not as separate global state.
-      setMessages([
-        ...newMessages,
-        { role: 'assistant', content: data.reply, recs: data.recs || [] },
-      ]);
+
+      if (!response.ok || !response.body) {
+        throw new Error(`Request failed (${response.status})`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let firstDeltaReceived = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // NDJSON: one complete JSON object per line. The last line in the
+        // buffer may be incomplete (cut mid-chunk) — hold it back.
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+
+          let event;
+          try {
+            event = JSON.parse(line);
+          } catch (err) {
+            console.error('Failed to parse stream line:', line, err);
+            continue;
+          }
+
+          if (event.type === 'delta') {
+            if (!firstDeltaReceived) {
+              firstDeltaReceived = true;
+              setLoading(false); // first bit of real text has arrived, stop showing the loading line
+            }
+            updateLastMessage((msg) => ({ ...msg, content: msg.content + event.text }));
+          } else if (event.type === 'done') {
+            updateLastMessage((msg) => ({ ...msg, recs: event.recs || [] }));
+          } else if (event.type === 'error') {
+            updateLastMessage((msg) => ({
+              ...msg,
+              content: msg.content || `Error: ${event.message}`,
+            }));
+          }
+        }
+      }
     } catch (err) {
-      setMessages([...newMessages, { role: 'assistant', content: 'Error: ' + err.message, recs: [] }]);
+      updateLastMessage((msg) => ({
+        ...msg,
+        content: msg.content || 'Error: ' + err.message,
+      }));
     } finally {
       setLoading(false);
     }
@@ -174,27 +232,39 @@ export default function App() {
 
             {phase === 'chat' && (
               <div>
-                {messages.map((msg, i) => (
-                  <div key={i} style={{ marginBottom: '1rem' }}>
-                    <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong>
-                    <MessageContent content={msg.content} />
+                {messages.map((msg, i) => {
+                  const isStreamingPlaceholder =
+                    msg.role === 'assistant' &&
+                    i === messages.length - 1 &&
+                    loading &&
+                    msg.content === '';
 
-                    {/* Recs only exist on assistant messages, and only when
-                        that reply actually contained recommendations. */}
-                    {msg.role === 'assistant' && msg.recs && msg.recs.length > 0 && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
-                        {msg.recs.map((rec, j) => (
-                          <RecommendationCard
-                            key={`${i}-${j}`}
-                            rec={rec}
-                            onPreviewPlayed={handlePreviewPlayed}
-                            onOutboundClick={handleOutboundClick}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  // Don't render an empty assistant bubble before the first
+                  // delta arrives — show the loading line instead.
+                  if (isStreamingPlaceholder) return null;
+
+                  return (
+                    <div key={i} style={{ marginBottom: '1rem' }}>
+                      <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong>
+                      <MessageContent content={msg.content} />
+
+                      {/* Recs only exist on assistant messages, and only
+                          once the stream's final 'done' event has arrived. */}
+                      {msg.role === 'assistant' && msg.recs && msg.recs.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+                          {msg.recs.map((rec, j) => (
+                            <RecommendationCard
+                              key={`${i}-${j}`}
+                              rec={rec}
+                              onPreviewPlayed={handlePreviewPlayed}
+                              onOutboundClick={handleOutboundClick}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
                 {loading && <p style={{ opacity: 0.6 }}>{loadingMessage}</p>}
 
                 <div style={{ marginTop: '1.5rem', display: 'flex', gap: '8px' }}>
