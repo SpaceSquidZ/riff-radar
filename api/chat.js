@@ -1,25 +1,32 @@
 // api/chat.js
 //
 // Vercel serverless function. Takes a conversation history + session metadata,
-// calls the Claude API with Groove's system prompt, and returns Groove's reply.
+// streams Claude's reply back to the client chunk-by-chunk (Week 5 addition —
+// previously this buffered the entire response before returning anything),
+// then validates any recommendations against iTunes, retries hallucinations
+// once, and logs events.
 //
-// Logs five event types to Supabase:
-//   message_sent            — user and assistant messages (content_length, not content)
-//   rec_generated            — when Groove returns recommendations (with track titles)
-//   itunes_validation_failed — when a recommended track fails iTunes lookup (Week 5)
+// Response protocol (newline-delimited JSON, one object per line):
+//   {"type":"delta","text":"..."}   — a chunk of Groove's visible reply
+//   {"type":"done","recs":[...]}    — stream finished; final validated recs
+//   {"type":"error","message":"..."} — something went wrong mid-stream
+//
+// Logs three event types to Supabase:
+//   message_sent, rec_generated, itunes_validation_failed
 
 import { GROOVE_BASE_PROMPT, getLoreAddendum } from '../src/groovePrompt.js';
 import { logEvent } from '../src/supabaseClient.js';
 import { validateAndEnrichRecs } from './lib/validateTracks.js';
 
-// Groove's prose still ends with the human-readable Spotify links (unchanged,
-// keeps the voice/formatting rules in groovePrompt.js intact). In addition,
-// per REC_METADATA_INSTRUCTION below, Groove appends one hidden JSON block
-// with clean {track, artist} pairs so we can validate against iTunes without
-// guessing where "Track Name Artist" splits in a decoded search-link string.
-//
-// Expected block, always the last thing in the reply:
-//   <!--RIFF_RADAR_RECS:[{"track":"...","artist":"..."}, ...]-->
+const RECS_MARKER_START = '<!--';
+
+// How many trailing characters of the stream we hold back from the client
+// at any given moment, in case they're the start of the hidden comment
+// arriving split across multiple stream chunks. 24 comfortably covers
+// "<!--RIFF_RADAR_RECS:" (20 chars) plus a small safety margin. This adds
+// no perceptible delay — it's a rolling few-character lag, not a pause.
+const HOLDBACK_CHARS = 24;
+
 function extractStructuredRecs(replyText) {
   const match = replyText.match(/<!--RIFF_RADAR_RECS:(\[.*?\])-->/s);
   if (!match) return { recs: [], cleanedReply: replyText };
@@ -31,9 +38,139 @@ function extractStructuredRecs(replyText) {
     console.error('Failed to parse RIFF_RADAR_RECS block:', err, match[1]);
   }
 
-  // Strip the hidden block out before it ever reaches the user.
   const cleanedReply = replyText.replace(match[0], '').trimEnd();
   return { recs, cleanedReply };
+}
+
+function buildSystemBlocks(loreAddendum) {
+  return [
+    {
+      type: 'text',
+      text: GROOVE_BASE_PROMPT,
+      cache_control: { type: 'ephemeral' },
+    },
+    {
+      type: 'text',
+      text:
+        (loreAddendum || '(No lore addendum active yet — this is a new user.)') +
+        `\n\n# Machine-readable recommendation metadata (internal, never shown to the user)\n` +
+        `Whenever your reply includes the 3-recommendation block, end your entire response ` +
+        `with exactly one HTML comment on its own line, after everything else, in this exact format:\n` +
+        `<!--RIFF_RADAR_RECS:[{"track":"Song Title","artist":"Artist Name"},{"track":"...","artist":"..."},{"track":"...","artist":"..."}]-->\n` +
+        `This must contain exactly the 3 tracks you just recommended, in the same order, with the ` +
+        `exact track and artist names (not URL-encoded, not abbreviated). Do not include this comment ` +
+        `if your reply does not contain recommendations. This comment is stripped before the user sees ` +
+        `your reply, so it does not need to fit your voice or formatting rules.`,
+    },
+  ];
+}
+
+// Streams one Claude call and relays visible text to res as NDJSON deltas,
+// withholding anything from the hidden RIFF_RADAR_RECS comment onward.
+// Returns the full raw text (including the hidden comment) once done, so
+// the caller can extract structured recs after the stream finishes.
+async function streamClaudeReply({ messages, loreAddendum, res }) {
+  const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-5',
+      max_tokens: 2500,
+      stream: true,
+      system: buildSystemBlocks(loreAddendum),
+      messages,
+    }),
+  });
+
+  if (!anthropicRes.ok || !anthropicRes.body) {
+    const errorBody = await anthropicRes.text().catch(() => '');
+    console.error('Anthropic API error:', anthropicRes.status, errorBody);
+    throw new Error(`Claude API request failed (${anthropicRes.status})`);
+  }
+
+  const reader = anthropicRes.body.getReader();
+  const decoder = new TextDecoder();
+
+  let sseBuffer = '';    // holds partial SSE event text across chunk boundaries
+  let fullText = '';     // the complete raw reply, including the hidden comment
+  let emittedLength = 0; // how much of fullText we've already sent to the client
+  let commentStartIdx = -1; // index in fullText where "<!--" was first seen, once found
+  let stopReason = null;
+
+  function processDeltaText(deltaText) {
+    fullText += deltaText;
+
+    if (commentStartIdx === -1) {
+      commentStartIdx = fullText.indexOf(RECS_MARKER_START);
+    }
+
+    if (commentStartIdx !== -1) {
+      // Once we've seen the start of a comment, emit everything up to it
+      // (if not already emitted) and never emit anything after it.
+      if (emittedLength < commentStartIdx) {
+        const safe = fullText.slice(emittedLength, commentStartIdx);
+        if (safe) res.write(JSON.stringify({ type: 'delta', text: safe }) + '\n');
+        emittedLength = commentStartIdx;
+      }
+      return;
+    }
+
+    // No comment marker seen yet — emit everything except the last
+    // HOLDBACK_CHARS, which might be the start of "<!--" split across
+    // the next chunk.
+    const safeEnd = Math.max(0, fullText.length - HOLDBACK_CHARS);
+    if (safeEnd > emittedLength) {
+      const safe = fullText.slice(emittedLength, safeEnd);
+      if (safe) res.write(JSON.stringify({ type: 'delta', text: safe }) + '\n');
+      emittedLength = safeEnd;
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    sseBuffer += decoder.decode(value, { stream: true });
+
+    // SSE events are separated by a blank line.
+    const events = sseBuffer.split('\n\n');
+    sseBuffer = events.pop(); // last piece may be incomplete, keep it buffered
+
+    for (const rawEvent of events) {
+      const dataLine = rawEvent.split('\n').find((l) => l.startsWith('data:'));
+      if (!dataLine) continue;
+
+      let payload;
+      try {
+        payload = JSON.parse(dataLine.slice(5).trim());
+      } catch {
+        continue;
+      }
+
+      if (payload.type === 'content_block_delta' && payload.delta?.type === 'text_delta') {
+        processDeltaText(payload.delta.text);
+      } else if (payload.type === 'message_delta' && payload.delta?.stop_reason) {
+        stopReason = payload.delta.stop_reason;
+      }
+    }
+  }
+
+  // Flush anything still held back (only relevant if no comment marker
+  // ever appeared — a reply with no recommendations at all).
+  if (commentStartIdx === -1 && emittedLength < fullText.length) {
+    res.write(JSON.stringify({ type: 'delta', text: fullText.slice(emittedLength) }) + '\n');
+    emittedLength = fullText.length;
+  }
+
+  if (stopReason === 'max_tokens') {
+    console.warn('Groove reply was truncated by max_tokens. Consider raising the limit further.');
+  }
+
+  return fullText;
 }
 
 export default async function handler(req, res) {
@@ -41,14 +178,19 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const { messages, sessionCount = 0, sessionId } = req.body;
+
+  if (!messages || !Array.isArray(messages)) {
+    return res.status(400).json({ error: 'messages array is required' });
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson',
+    'Cache-Control': 'no-cache',
+    'X-Accel-Buffering': 'no', // disables proxy buffering some hosts apply to chunked responses
+  });
+
   try {
-    const { messages, sessionCount = 0, sessionId } = req.body;
-
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'messages array is required' });
-    }
-
-    // Log the user's incoming message (the last one in the array).
     const lastUserMessage = messages[messages.length - 1];
     if (sessionId && lastUserMessage?.role === 'user') {
       logEvent(sessionId, 'message_sent', {
@@ -59,73 +201,14 @@ export default async function handler(req, res) {
 
     const loreAddendum = getLoreAddendum(sessionCount);
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-5',
-        max_tokens: 1536,
-        system: [
-          {
-            type: 'text',
-            text: GROOVE_BASE_PROMPT,
-            cache_control: { type: 'ephemeral' },
-          },
-          {
-            // REC_METADATA_INSTRUCTION: appended as its own cached-separately
-            // block so it doesn't disturb the existing GROOVE_BASE_PROMPT
-            // cache_control boundary. See groovePrompt.js Section
-            // "Recommendation structure" for the human-facing format this
-            // supplements, not replaces.
-            type: 'text',
-            text:
-              (loreAddendum || '(No lore addendum active yet — this is a new user.)') +
-              `\n\n# Machine-readable recommendation metadata (internal, never shown to the user)\n` +
-              `Whenever your reply includes the 3-recommendation block, end your entire response ` +
-              `with exactly one HTML comment on its own line, after everything else, in this exact format:\n` +
-              `<!--RIFF_RADAR_RECS:[{"track":"Song Title","artist":"Artist Name"},{"track":"...","artist":"..."},{"track":"...","artist":"..."}]-->\n` +
-              `This must contain exactly the 3 tracks you just recommended, in the same order, with the ` +
-              `exact track and artist names (not URL-encoded, not abbreviated). Do not include this comment ` +
-              `if your reply does not contain recommendations. This comment is stripped before the user sees ` +
-              `your reply, so it does not need to fit your voice or formatting rules.`,
-          },
-        ],
-        messages: messages,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.error('Anthropic API error:', response.status, errorBody);
-      return res.status(response.status).json({ error: 'Claude API request failed' });
-    }
-
-    const data = await response.json();
-
-    // stop_reason 'max_tokens' means Claude got cut off mid-reply — usually
-    // shows up as a truncated sentence and a missing RIFF_RADAR_RECS block.
-    // Logging this makes a future max_tokens ceiling issue visible in Vercel
-    // logs instead of just looking like "recs silently didn't show up."
-    if (data.stop_reason === 'max_tokens') {
-      console.warn('Groove reply was truncated by max_tokens. Consider raising the limit further.');
-    }
-
-    const rawReplyText = data.content
-      .filter((block) => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n');
-
+    const rawReplyText = await streamClaudeReply({ messages, loreAddendum, res });
     const { recs, cleanedReply } = extractStructuredRecs(rawReplyText);
+
     let replyText = cleanedReply;
     let enrichedRecs = [];
 
     if (recs.length > 0) {
       enrichedRecs = await validateAndEnrichRecs(recs);
-
       const failed = enrichedRecs.filter((r) => r.itunesValidation === 'not_found');
 
       if (sessionId && failed.length > 0) {
@@ -136,10 +219,14 @@ export default async function handler(req, res) {
         });
       }
 
-      // One retry pass: ask Claude to replace only the failed tracks.
-      // Capped at 1 pass so a stubborn genre cluster can't loop forever
-      // (per PRD Automation 3 and the integration sketch in validateTracks.js).
       if (failed.length > 0) {
+        // Note: this retry can only correct the recommendation CARDS sent
+        // in the final 'done' event below — it cannot retroactively edit
+        // the prose already streamed to the screen above. If Groove's
+        // visible text named the hallucinated track, that text stays as
+        // written; only the card underneath reflects the validated
+        // replacement. This is a known tradeoff of combining live
+        // streaming with the silent hallucination-retry safety net.
         const retryResult = await retryFailedRecs({
           messages,
           loreAddendum,
@@ -152,7 +239,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Log the assistant's reply.
     if (sessionId) {
       logEvent(sessionId, 'message_sent', {
         role: 'assistant',
@@ -167,18 +253,26 @@ export default async function handler(req, res) {
       }
     }
 
-    return res.status(200).json({ reply: replyText, recs: enrichedRecs });
+    res.write(JSON.stringify({ type: 'done', recs: enrichedRecs }) + '\n');
+    res.end();
   } catch (err) {
     console.error('Error in /api/chat:', err);
-    return res.status(500).json({ error: 'Internal server error' });
+    // The response is already chunked and may be partially sent, so we
+    // can't fall back to res.status(500).json(...) here — write an error
+    // event in the same NDJSON protocol instead so the client can show
+    // something honest rather than hanging.
+    try {
+      res.write(JSON.stringify({ type: 'error', message: 'Internal server error' }) + '\n');
+    } catch {
+      // response may already be closed; nothing more we can do
+    }
+    res.end();
   }
 }
 
-// Re-prompts Claude to replace only the tracks that failed iTunes validation,
-// reusing the same conversation + system prompt. Silent to the user — this
-// happens before any reply is returned. Returns null (caller keeps the
-// original enrichedRecs, hallucinations and all) if the retry itself fails
-// for any reason; we never want a retry-path bug to break the whole response.
+// Re-prompts Claude to replace only the tracks that failed iTunes validation.
+// This one stays non-streaming (buffered) — it's a silent, invisible-to-the-
+// user correction pass, not something that needs to render live.
 async function retryFailedRecs({ messages, loreAddendum, failed, goodRecs }) {
   try {
     const retryInstruction = {
@@ -203,11 +297,8 @@ async function retryFailedRecs({ messages, loreAddendum, failed, goodRecs }) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-5',
-        max_tokens: 1536,
-        system: [
-          { type: 'text', text: GROOVE_BASE_PROMPT, cache_control: { type: 'ephemeral' } },
-          { type: 'text', text: loreAddendum || '(No lore addendum active yet.)' },
-        ],
+        max_tokens: 2500,
+        system: buildSystemBlocks(loreAddendum),
         messages: [...messages, retryInstruction],
       }),
     });
@@ -223,8 +314,6 @@ async function retryFailedRecs({ messages, loreAddendum, failed, goodRecs }) {
     const { recs: retriedRecs } = extractStructuredRecs(rawReplyText);
     if (retriedRecs.length === 0) return null;
 
-    // Validate the retry once. If it still fails, we ship what we have —
-    // no second retry loop.
     return await validateAndEnrichRecs(retriedRecs);
   } catch (err) {
     console.error('Retry-for-hallucination pass failed:', err);
