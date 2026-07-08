@@ -7,6 +7,7 @@ import YouTubeMomentPicker from './YouTubeMomentPicker';
 import RecommendationCard from './RecommendationCard';
 import { getSessionId } from './sessionId';
 import { logEvent } from './supabaseClient';
+import './riff-radar.css';
 
 const LOADING_MESSAGES = [
   'Flipping through the shelf...',
@@ -29,16 +30,13 @@ function getRandomLoadingMessage() {
 // survives the form-to-chat transition and stays visible post-submission.
 
 export default function App() {
-  // Determine initial phase: skip landing if already seen.
   const [phase, setPhase] = useState(hasSeenLanding() ? 'form' : 'landing');
   const [showConsent, setShowConsent] = useState(!hasSeenConsent());
 
-  // YouTube state — owned here so the player survives phase transitions.
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [youtubeTimestamp, setYoutubeTimestamp] = useState('');
   const [titleGuess, setTitleGuess] = useState(null);
 
-  // Chat state.
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -49,8 +47,6 @@ export default function App() {
     logEvent(sessionId, 'session_start');
   }, []);
 
-  // Appends text to (or sets recs on) the LAST message in the array.
-  // Used while a stream is actively writing into that message.
   function updateLastMessage(updater) {
     setMessages((prev) => {
       const next = [...prev];
@@ -64,8 +60,6 @@ export default function App() {
     setLoading(true);
     setLoadingMessage(getRandomLoadingMessage());
 
-    // Placeholder assistant message that we stream text into as chunks
-    // arrive. Starts empty so nothing renders until the first delta lands.
     setMessages([...newMessages, { role: 'assistant', content: '', recs: [] }]);
 
     try {
@@ -91,8 +85,6 @@ export default function App() {
 
         buffer += decoder.decode(value, { stream: true });
 
-        // NDJSON: one complete JSON object per line. The last line in the
-        // buffer may be incomplete (cut mid-chunk) — hold it back.
         const lines = buffer.split('\n');
         buffer = lines.pop();
 
@@ -110,7 +102,7 @@ export default function App() {
           if (event.type === 'delta') {
             if (!firstDeltaReceived) {
               firstDeltaReceived = true;
-              setLoading(false); // first bit of real text has arrived, stop showing the loading line
+              setLoading(false);
             }
             updateLastMessage((msg) => ({ ...msg, content: msg.content + event.text }));
           } else if (event.type === 'done') {
@@ -148,9 +140,6 @@ export default function App() {
     sendMessage(newMessages);
   }
 
-  // preview_played and outbound_click handlers, passed down to every
-  // RecommendationCard. Both log to the same events table as everything
-  // else (PRD Section 8 instrumentation plan).
   function handlePreviewPlayed({ track, artist }) {
     const sessionId = getSessionId();
     logEvent(sessionId, 'preview_played', { track, artist });
@@ -161,14 +150,11 @@ export default function App() {
     logEvent(sessionId, 'outbound_click', { track, artist, service, url });
   }
 
-  // Landing screen — shown once per phase milestone.
   if (phase === 'landing') {
     return (
       <>
         <LandingScreen onEnter={() => setPhase('form')} />
-        {showConsent && (
-          <ConsentBanner onAccept={() => setShowConsent(false)} />
-        )}
+        {showConsent && <ConsentBanner onAccept={() => setShowConsent(false)} />}
       </>
     );
   }
@@ -178,24 +164,16 @@ export default function App() {
       <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '1.5rem' }}>
         <h1>Riff Radar</h1>
 
-        {/* YouTubeMomentPicker is rendered exactly once here, outside both
-            phase conditionals, so React never unmounts it between phases.
-            Visibility and layout are controlled via CSS, not conditional rendering. */}
-        <div style={{
-          display: 'flex',
-          gap: '24px',
-          alignItems: 'flex-start',
-        }}>
-          {/* Left column: YouTube picker — always in the DOM once videoLoaded,
-              hidden entirely before a video is loaded in chat phase.
-              position: sticky keeps the video visible while chat scrolls. */}
-          <div style={{
-            flex: '0 0 420px',
-            display: (phase === 'chat' && !videoLoaded) ? 'none' : 'block',
-            position: 'sticky',
-            top: '1.5rem',
-            alignSelf: 'flex-start',
-          }}>
+        <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
+          <div
+            style={{
+              flex: '0 0 420px',
+              display: phase === 'chat' && !videoLoaded ? 'none' : 'block',
+              position: 'sticky',
+              top: '1.5rem',
+              alignSelf: 'flex-start',
+            }}
+          >
             <YouTubeMomentPicker
               onTimestampCaptured={setYoutubeTimestamp}
               onTitleGuessed={setTitleGuess}
@@ -209,7 +187,6 @@ export default function App() {
             )}
           </div>
 
-          {/* Right column: form or chat depending on phase */}
           <div style={{ flex: '1 1 0', minWidth: 0 }}>
             {phase === 'form' && (
               <>
@@ -239,19 +216,15 @@ export default function App() {
                     loading &&
                     msg.content === '';
 
-                  // Don't render an empty assistant bubble before the first
-                  // delta arrives — show the loading line instead.
                   if (isStreamingPlaceholder) return null;
 
                   return (
-                    <div key={i} style={{ marginBottom: '1rem' }}>
+                    <div key={i} className="chat-message">
                       <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong>
                       <MessageContent content={msg.content} />
 
-                      {/* Recs only exist on assistant messages, and only
-                          once the stream's final 'done' event has arrived. */}
                       {msg.role === 'assistant' && msg.recs && msg.recs.length > 0 && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+                        <div className="rec-grid">
                           {msg.recs.map((rec, j) => (
                             <RecommendationCard
                               key={`${i}-${j}`}
@@ -267,7 +240,7 @@ export default function App() {
                 })}
                 {loading && <p style={{ opacity: 0.6 }}>{loadingMessage}</p>}
 
-                <div style={{ marginTop: '1.5rem', display: 'flex', gap: '8px' }}>
+                <div style={{ marginTop: '1.5rem', display: 'flex', gap: '8px', maxWidth: '640px' }}>
                   <input
                     type="text"
                     value={input}

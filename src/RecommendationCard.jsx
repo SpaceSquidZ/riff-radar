@@ -1,20 +1,18 @@
 import { useRef, useState } from 'react';
 
-// Renders one Groove recommendation: album art, a 30-second in-app preview
-// (from the iTunes-enriched fields your /api/chat now attaches), a real
-// Apple Music link (trackViewUrl), and a Spotify search link.
+// One recommendation card: match-axis pill, thumbnail art, title/artist,
+// year/genre, a clamped explanation, preview player, and two link buttons.
+// Designed to sit in a 3-column grid (see App.jsx) with all cards in a row
+// ending at the same height via flex + margin-top: auto on the button group.
 //
-// Expects a `rec` shaped like what validateAndEnrichRecs() in
-// api/lib/validateTracks.js produces:
+// Expects a `rec` shaped like what validateAndEnrichRecs() produces, now
+// carrying the richer metadata Groove emits (matchAxis, genre, explanation)
+// alongside the iTunes-enriched fields:
 //   {
-//     track, artist, releaseYear, genre, explanation, matchAxis,
+//     track, artist, matchAxis, genre, explanation, releaseYear,
 //     itunesValidation: 'found' | 'not_found' | 'unconfirmed',
 //     previewUrl, artworkUrl, trackViewUrl,
 //   }
-//
-// Fallback behavior (PRD Risk 3): if itunesValidation !== 'found', render
-// no player, no artwork, no error message — just the Spotify search link.
-// A missing preview should never look like a broken app.
 
 function spotifySearchUrl(track, artist) {
   const q = encodeURIComponent(`${track} ${artist}`);
@@ -41,8 +39,6 @@ export default function RecommendationCard({ rec, onPreviewPlayed, onOutboundCli
     audioRef.current.play();
     setIsPlaying(true);
 
-    // preview_played event, per PRD Section 8 instrumentation plan.
-    // Logged once per card, on first play, not on every resume.
     if (!hasLoggedPlay) {
       setHasLoggedPlay(true);
       onPreviewPlayed?.({ track: rec.track, artist: rec.artist });
@@ -57,20 +53,23 @@ export default function RecommendationCard({ rec, onPreviewPlayed, onOutboundCli
     onOutboundClick?.({ track: rec.track, artist: rec.artist, service, url });
   }
 
+  const metaLine = [rec.releaseYear, rec.genre].filter(Boolean).join(' \u00b7 ');
+
   return (
     <div className="rec-card">
+      {rec.matchAxis && <span className="rec-pill">{rec.matchAxis}</span>}
+
       {hasPreview && rec.artworkUrl && (
         <img src={rec.artworkUrl} alt={`${rec.track} artwork`} className="rec-artwork" />
       )}
 
-      <div className="rec-body">
-        <p className="rec-match-axis">{rec.matchAxis}</p>
-        <h4 className="rec-title">
-          {rec.track} <span className="rec-artist">— {rec.artist}</span>
-        </h4>
-        {rec.releaseYear && <p className="rec-meta">{rec.releaseYear} · {rec.genre}</p>}
-        <p className="rec-explanation">{rec.explanation}</p>
+      <p className="rec-title">{rec.track}</p>
+      <p className="rec-artist">{rec.artist}</p>
+      {metaLine && <p className="rec-meta">{metaLine}</p>}
 
+      {rec.explanation && <p className="rec-explanation">{rec.explanation}</p>}
+
+      <div className="rec-actions">
         {hasPreview && (
           <div className="rec-preview">
             <audio
@@ -91,9 +90,10 @@ export default function RecommendationCard({ rec, onPreviewPlayed, onOutboundCli
               href={rec.trackViewUrl}
               target="_blank"
               rel="noopener noreferrer"
+              className="rec-link-button"
               onClick={() => logOutbound('apple_music', rec.trackViewUrl)}
             >
-              Open in Apple Music
+              Apple Music
             </a>
           )}
 
@@ -101,9 +101,10 @@ export default function RecommendationCard({ rec, onPreviewPlayed, onOutboundCli
             href={spotifySearchUrl(rec.track, rec.artist)}
             target="_blank"
             rel="noopener noreferrer"
+            className="rec-link-button"
             onClick={() => logOutbound('spotify', spotifySearchUrl(rec.track, rec.artist))}
           >
-            Open in Spotify
+            Spotify
           </a>
         </div>
       </div>

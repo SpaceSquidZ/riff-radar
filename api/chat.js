@@ -1,10 +1,8 @@
 // api/chat.js
 //
 // Vercel serverless function. Takes a conversation history + session metadata,
-// streams Claude's reply back to the client chunk-by-chunk (Week 5 addition —
-// previously this buffered the entire response before returning anything),
-// then validates any recommendations against iTunes, retries hallucinations
-// once, and logs events.
+// streams Claude's reply back to the client chunk-by-chunk, then validates any
+// recommendations against iTunes, retries hallucinations once, and logs events.
 //
 // Response protocol (newline-delimited JSON, one object per line):
 //   {"type":"delta","text":"..."}   — a chunk of Groove's visible reply
@@ -23,8 +21,7 @@ const RECS_MARKER_START = '<!--';
 // How many trailing characters of the stream we hold back from the client
 // at any given moment, in case they're the start of the hidden comment
 // arriving split across multiple stream chunks. 24 comfortably covers
-// "<!--RIFF_RADAR_RECS:" (20 chars) plus a small safety margin. This adds
-// no perceptible delay — it's a rolling few-character lag, not a pause.
+// "<!--RIFF_RADAR_RECS:" (20 chars) plus a small safety margin.
 const HOLDBACK_CHARS = 24;
 
 function extractStructuredRecs(replyText) {
@@ -42,6 +39,16 @@ function extractStructuredRecs(replyText) {
   return { recs, cleanedReply };
 }
 
+// This addendum is appended per-request, not written into groovePrompt.js.
+// It does two things beyond the lore addendum:
+//   1. Overrides the base prompt's "always include a Spotify link" hard rule
+//      for THIS app specifically, since RecommendationCard now renders the
+//      real Apple Music + Spotify links itself. Groove's persona file keeps
+//      its own rule as originally written; this is a per-integration
+//      override layered on top, not an edit to that file.
+//   2. Asks for a richer hidden metadata block (matchAxis, genre, a short
+//      explanation) so RecommendationCard can render real song info instead
+//      of just a bare track/artist pair.
 function buildSystemBlocks(loreAddendum) {
   return [
     {
@@ -53,14 +60,23 @@ function buildSystemBlocks(loreAddendum) {
       type: 'text',
       text:
         (loreAddendum || '(No lore addendum active yet — this is a new user.)') +
-        `\n\n# Machine-readable recommendation metadata (internal, never shown to the user)\n` +
+        `\n\n# App-specific override: no inline search links\n` +
+        `This app (Riff Radar) renders a real Apple Music link and Spotify search link ` +
+        `automatically underneath each recommendation card. Do NOT include a Spotify or ` +
+        `Apple Music search link in your visible reply text for any recommendation. Simply ` +
+        `end each recommendation's explanation naturally, without a link. This overrides the ` +
+        `link-inclusion instruction elsewhere in your instructions for this app specifically.\n\n` +
+        `# Machine-readable recommendation metadata (internal, never shown to the user)\n` +
         `Whenever your reply includes the 3-recommendation block, end your entire response ` +
         `with exactly one HTML comment on its own line, after everything else, in this exact format:\n` +
-        `<!--RIFF_RADAR_RECS:[{"track":"Song Title","artist":"Artist Name"},{"track":"...","artist":"..."},{"track":"...","artist":"..."}]-->\n` +
-        `This must contain exactly the 3 tracks you just recommended, in the same order, with the ` +
-        `exact track and artist names (not URL-encoded, not abbreviated). Do not include this comment ` +
-        `if your reply does not contain recommendations. This comment is stripped before the user sees ` +
-        `your reply, so it does not need to fit your voice or formatting rules.`,
+        `<!--RIFF_RADAR_RECS:[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","explanation":"One short sentence on the musical link, no timestamp callout needed here."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","explanation":"..."}]-->\n` +
+        `This must contain exactly the 3 tracks you just recommended, in the same order, with ` +
+        `exact track and artist names (not URL-encoded, not abbreviated). "matchAxis" must be ` +
+        `exactly one of: "Structural twin", "Adjacent genre", "Surprise pick", matching which of ` +
+        `the 3 recommendation slots each track fills. "explanation" should be a single short ` +
+        `sentence, plain text, no markdown. Do not include this comment if your reply does not ` +
+        `contain recommendations. This comment is stripped before the user sees your reply, so ` +
+        `it does not need to fit your voice or formatting rules.`,
     },
   ];
 }
@@ -95,10 +111,10 @@ async function streamClaudeReply({ messages, loreAddendum, res }) {
   const reader = anthropicRes.body.getReader();
   const decoder = new TextDecoder();
 
-  let sseBuffer = '';    // holds partial SSE event text across chunk boundaries
-  let fullText = '';     // the complete raw reply, including the hidden comment
-  let emittedLength = 0; // how much of fullText we've already sent to the client
-  let commentStartIdx = -1; // index in fullText where "<!--" was first seen, once found
+  let sseBuffer = '';
+  let fullText = '';
+  let emittedLength = 0;
+  let commentStartIdx = -1;
   let stopReason = null;
 
   function processDeltaText(deltaText) {
@@ -109,8 +125,6 @@ async function streamClaudeReply({ messages, loreAddendum, res }) {
     }
 
     if (commentStartIdx !== -1) {
-      // Once we've seen the start of a comment, emit everything up to it
-      // (if not already emitted) and never emit anything after it.
       if (emittedLength < commentStartIdx) {
         const safe = fullText.slice(emittedLength, commentStartIdx);
         if (safe) res.write(JSON.stringify({ type: 'delta', text: safe }) + '\n');
@@ -119,9 +133,6 @@ async function streamClaudeReply({ messages, loreAddendum, res }) {
       return;
     }
 
-    // No comment marker seen yet — emit everything except the last
-    // HOLDBACK_CHARS, which might be the start of "<!--" split across
-    // the next chunk.
     const safeEnd = Math.max(0, fullText.length - HOLDBACK_CHARS);
     if (safeEnd > emittedLength) {
       const safe = fullText.slice(emittedLength, safeEnd);
@@ -136,9 +147,8 @@ async function streamClaudeReply({ messages, loreAddendum, res }) {
 
     sseBuffer += decoder.decode(value, { stream: true });
 
-    // SSE events are separated by a blank line.
     const events = sseBuffer.split('\n\n');
-    sseBuffer = events.pop(); // last piece may be incomplete, keep it buffered
+    sseBuffer = events.pop();
 
     for (const rawEvent of events) {
       const dataLine = rawEvent.split('\n').find((l) => l.startsWith('data:'));
@@ -159,8 +169,6 @@ async function streamClaudeReply({ messages, loreAddendum, res }) {
     }
   }
 
-  // Flush anything still held back (only relevant if no comment marker
-  // ever appeared — a reply with no recommendations at all).
   if (commentStartIdx === -1 && emittedLength < fullText.length) {
     res.write(JSON.stringify({ type: 'delta', text: fullText.slice(emittedLength) }) + '\n');
     emittedLength = fullText.length;
@@ -187,7 +195,7 @@ export default async function handler(req, res) {
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson',
     'Cache-Control': 'no-cache',
-    'X-Accel-Buffering': 'no', // disables proxy buffering some hosts apply to chunked responses
+    'X-Accel-Buffering': 'no',
   });
 
   try {
@@ -220,13 +228,6 @@ export default async function handler(req, res) {
       }
 
       if (failed.length > 0) {
-        // Note: this retry can only correct the recommendation CARDS sent
-        // in the final 'done' event below — it cannot retroactively edit
-        // the prose already streamed to the screen above. If Groove's
-        // visible text named the hallucinated track, that text stays as
-        // written; only the card underneath reflects the validated
-        // replacement. This is a known tradeoff of combining live
-        // streaming with the silent hallucination-retry safety net.
         const retryResult = await retryFailedRecs({
           messages,
           loreAddendum,
@@ -257,22 +258,15 @@ export default async function handler(req, res) {
     res.end();
   } catch (err) {
     console.error('Error in /api/chat:', err);
-    // The response is already chunked and may be partially sent, so we
-    // can't fall back to res.status(500).json(...) here — write an error
-    // event in the same NDJSON protocol instead so the client can show
-    // something honest rather than hanging.
     try {
       res.write(JSON.stringify({ type: 'error', message: 'Internal server error' }) + '\n');
     } catch {
-      // response may already be closed; nothing more we can do
+      // response may already be closed
     }
     res.end();
   }
 }
 
-// Re-prompts Claude to replace only the tracks that failed iTunes validation.
-// This one stays non-streaming (buffered) — it's a silent, invisible-to-the-
-// user correction pass, not something that needs to render live.
 async function retryFailedRecs({ messages, loreAddendum, failed, goodRecs }) {
   try {
     const retryInstruction = {
