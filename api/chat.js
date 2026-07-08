@@ -5,9 +5,9 @@
 // recommendations against iTunes, retries hallucinations once, and logs events.
 //
 // Response protocol (newline-delimited JSON, one object per line):
-//   {"type":"delta","text":"..."}   — a chunk of Groove's visible reply
-//   {"type":"done","recs":[...]}    — stream finished; final validated recs
-//   {"type":"error","message":"..."} — something went wrong mid-stream
+//   {"type":"delta","text":"..."}                          — a chunk of Groove's visible reply
+//   {"type":"done","recs":[...],"followUpQuestion":"..."}  — stream finished
+//   {"type":"error","message":"..."}                        — something went wrong mid-stream
 //
 // Logs three event types to Supabase:
 //   message_sent, rec_generated, itunes_validation_failed
@@ -17,38 +17,40 @@ import { logEvent } from '../src/supabaseClient.js';
 import { validateAndEnrichRecs } from './lib/validateTracks.js';
 
 const RECS_MARKER_START = '<!--';
-
-// How many trailing characters of the stream we hold back from the client
-// at any given moment, in case they're the start of the hidden comment
-// arriving split across multiple stream chunks. 24 comfortably covers
-// "<!--RIFF_RADAR_RECS:" (20 chars) plus a small safety margin.
 const HOLDBACK_CHARS = 24;
 
+// Parses the hidden metadata comment, now a single JSON OBJECT (not a bare
+// array) so it can carry both the rec list and the follow-up question:
+//   <!--RIFF_RADAR_RECS:{"recs":[...],"followUpQuestion":"..."}-->
 function extractStructuredRecs(replyText) {
-  const match = replyText.match(/<!--RIFF_RADAR_RECS:(\[.*?\])-->/s);
-  if (!match) return { recs: [], cleanedReply: replyText };
+  const match = replyText.match(/<!--RIFF_RADAR_RECS:(\{.*?\})-->/s);
+  if (!match) return { recs: [], followUpQuestion: '', cleanedReply: replyText };
 
-  let recs = [];
+  let parsed = {};
   try {
-    recs = JSON.parse(match[1]);
+    parsed = JSON.parse(match[1]);
   } catch (err) {
     console.error('Failed to parse RIFF_RADAR_RECS block:', err, match[1]);
   }
 
   const cleanedReply = replyText.replace(match[0], '').trimEnd();
-  return { recs, cleanedReply };
+  return {
+    recs: Array.isArray(parsed.recs) ? parsed.recs : [],
+    followUpQuestion: typeof parsed.followUpQuestion === 'string' ? parsed.followUpQuestion : '',
+    cleanedReply,
+  };
 }
 
-// This addendum is appended per-request, not written into groovePrompt.js.
-// It does two things beyond the lore addendum:
-//   1. Overrides the base prompt's "always include a Spotify link" hard rule
-//      for THIS app specifically, since RecommendationCard now renders the
-//      real Apple Music + Spotify links itself. Groove's persona file keeps
-//      its own rule as originally written; this is a per-integration
-//      override layered on top, not an edit to that file.
-//   2. Asks for a richer hidden metadata block (matchAxis, genre, a short
-//      explanation) so RecommendationCard can render real song info instead
-//      of just a bare track/artist pair.
+// App-specific overrides layered on top of groovePrompt.js at request time.
+// None of this edits the persona file itself:
+//   1. No inline search links (RecommendationCard renders real links).
+//   2. When giving recommendations, the VISIBLE reply is trimmed to just the
+//      opening reflection — no per-song paragraphs, no closing question.
+//      Per-song detail and the refinement question move entirely into the
+//      hidden metadata block, so the app can render them in the intended
+//      order: reflection -> rec cards -> follow-up question. This also
+//      removes the duplication where the same explanation was written once
+//      in prose and once (shortened) in the JSON.
 function buildSystemBlocks(loreAddendum) {
   return [
     {
@@ -60,31 +62,34 @@ function buildSystemBlocks(loreAddendum) {
       type: 'text',
       text:
         (loreAddendum || '(No lore addendum active yet — this is a new user.)') +
-        `\n\n# App-specific override: no inline search links\n` +
-        `This app (Riff Radar) renders a real Apple Music link and Spotify search link ` +
-        `automatically underneath each recommendation card. Do NOT include a Spotify or ` +
-        `Apple Music search link in your visible reply text for any recommendation. Simply ` +
-        `end each recommendation's explanation naturally, without a link. This overrides the ` +
-        `link-inclusion instruction elsewhere in your instructions for this app specifically.\n\n` +
+        `\n\n# App-specific overrides for Riff Radar\n` +
+        `This app renders recommendations as visual cards (art, preview player, real Apple ` +
+        `Music and Spotify links) and does not display raw links or per-song paragraphs in ` +
+        `the chat text. Two overrides to your normal behavior, for this app only:\n\n` +
+        `1. Do NOT include a Spotify or Apple Music search link anywhere in your visible reply.\n\n` +
+        `2. Whenever you would give the 3-recommendation block: your VISIBLE reply text must ` +
+        `contain ONLY your opening reflective sentences about the moment the user shared (1-2 ` +
+        `sentences, same warm, specific, musically-grounded voice as always). Do NOT include ` +
+        `song titles, artist names, per-song explanations, or your closing refinement question ` +
+        `in the visible text. All of that moves into the hidden metadata block below instead, ` +
+        `because the app renders it separately (cards, then the question underneath). This is ` +
+        `a significant shortening of your visible reply for this app specifically; it does not ` +
+        `change how much you'd normally say elsewhere.\n\n` +
+        `If your reply is pure conversation with no recommendations, ignore both overrides above ` +
+        `and respond completely normally with no length restriction.\n\n` +
         `# Machine-readable recommendation metadata (internal, never shown to the user)\n` +
         `Whenever your reply includes the 3-recommendation block, end your entire response ` +
         `with exactly one HTML comment on its own line, after everything else, in this exact format:\n` +
-        `<!--RIFF_RADAR_RECS:[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","explanation":"One short sentence on the musical link, no timestamp callout needed here."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","explanation":"..."}]-->\n` +
-        `This must contain exactly the 3 tracks you just recommended, in the same order, with ` +
-        `exact track and artist names (not URL-encoded, not abbreviated). "matchAxis" must be ` +
-        `exactly one of: "Structural twin", "Adjacent genre", "Surprise pick", matching which of ` +
-        `the 3 recommendation slots each track fills. "explanation" should be a single short ` +
-        `sentence, plain text, no markdown. Do not include this comment if your reply does not ` +
-        `contain recommendations. This comment is stripped before the user sees your reply, so ` +
-        `it does not need to fit your voice or formatting rules.`,
+        `<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","explanation":"One to two short sentences on the musical link, the same detail you'd normally put in prose, no timestamp needed."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","explanation":"..."}],"followUpQuestion":"Your normal closing refinement question, offering two concrete directions."}-->\n` +
+        `"matchAxis" must be exactly one of: "Structural twin", "Adjacent genre", "Surprise pick", ` +
+        `matching which of the 3 slots each track fills. "explanation" is plain text, no markdown, ` +
+        `no links. "followUpQuestion" is plain text, no markdown. Do not include this comment if ` +
+        `your reply does not contain recommendations. This comment is stripped before the user ` +
+        `sees your reply, so none of it needs to fit your voice or formatting rules.`,
     },
   ];
 }
 
-// Streams one Claude call and relays visible text to res as NDJSON deltas,
-// withholding anything from the hidden RIFF_RADAR_RECS comment onward.
-// Returns the full raw text (including the hidden comment) once done, so
-// the caller can extract structured recs after the stream finishes.
 async function streamClaudeReply({ messages, loreAddendum, res }) {
   const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -146,7 +151,6 @@ async function streamClaudeReply({ messages, loreAddendum, res }) {
     if (done) break;
 
     sseBuffer += decoder.decode(value, { stream: true });
-
     const events = sseBuffer.split('\n\n');
     sseBuffer = events.pop();
 
@@ -210,7 +214,7 @@ export default async function handler(req, res) {
     const loreAddendum = getLoreAddendum(sessionCount);
 
     const rawReplyText = await streamClaudeReply({ messages, loreAddendum, res });
-    const { recs, cleanedReply } = extractStructuredRecs(rawReplyText);
+    const { recs, followUpQuestion, cleanedReply } = extractStructuredRecs(rawReplyText);
 
     let replyText = cleanedReply;
     let enrichedRecs = [];
@@ -254,7 +258,7 @@ export default async function handler(req, res) {
       }
     }
 
-    res.write(JSON.stringify({ type: 'done', recs: enrichedRecs }) + '\n');
+    res.write(JSON.stringify({ type: 'done', recs: enrichedRecs, followUpQuestion }) + '\n');
     res.end();
   } catch (err) {
     console.error('Error in /api/chat:', err);

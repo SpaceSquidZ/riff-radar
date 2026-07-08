@@ -60,7 +60,9 @@ export default function App() {
     setLoading(true);
     setLoadingMessage(getRandomLoadingMessage());
 
-    setMessages([...newMessages, { role: 'assistant', content: '', recs: [] }]);
+    // recs and followUpQuestion both start empty and get filled in once
+    // the stream's final 'done' event arrives.
+    setMessages([...newMessages, { role: 'assistant', content: '', recs: [], followUpQuestion: '' }]);
 
     try {
       const sessionId = getSessionId();
@@ -84,7 +86,6 @@ export default function App() {
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-
         const lines = buffer.split('\n');
         buffer = lines.pop();
 
@@ -106,7 +107,11 @@ export default function App() {
             }
             updateLastMessage((msg) => ({ ...msg, content: msg.content + event.text }));
           } else if (event.type === 'done') {
-            updateLastMessage((msg) => ({ ...msg, recs: event.recs || [] }));
+            updateLastMessage((msg) => ({
+              ...msg,
+              recs: event.recs || [],
+              followUpQuestion: event.followUpQuestion || '',
+            }));
           } else if (event.type === 'error') {
             updateLastMessage((msg) => ({
               ...msg,
@@ -224,16 +229,25 @@ export default function App() {
                       <MessageContent content={msg.content} />
 
                       {msg.role === 'assistant' && msg.recs && msg.recs.length > 0 && (
-                        <div className="rec-grid">
-                          {msg.recs.map((rec, j) => (
-                            <RecommendationCard
-                              key={`${i}-${j}`}
-                              rec={rec}
-                              onPreviewPlayed={handlePreviewPlayed}
-                              onOutboundClick={handleOutboundClick}
-                            />
-                          ))}
-                        </div>
+                        <>
+                          <div className="rec-grid">
+                            {msg.recs.map((rec, j) => (
+                              <RecommendationCard
+                                key={`${i}-${j}`}
+                                rec={rec}
+                                onPreviewPlayed={handlePreviewPlayed}
+                                onOutboundClick={handleOutboundClick}
+                              />
+                            ))}
+                          </div>
+
+                          {/* Follow-up question renders below the cards, not
+                              inline with the opening reflection above — see
+                              chat.js's followUpQuestion field. */}
+                          {msg.followUpQuestion && (
+                            <p className="rec-followup">{msg.followUpQuestion}</p>
+                          )}
+                        </>
                       )}
                     </div>
                   );
