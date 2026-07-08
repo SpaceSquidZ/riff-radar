@@ -19,9 +19,6 @@ import { validateAndEnrichRecs } from './lib/validateTracks.js';
 const RECS_MARKER_START = '<!--';
 const HOLDBACK_CHARS = 24;
 
-// Parses the hidden metadata comment, now a single JSON OBJECT (not a bare
-// array) so it can carry both the rec list and the follow-up question:
-//   <!--RIFF_RADAR_RECS:{"recs":[...],"followUpQuestion":"..."}-->
 function extractStructuredRecs(replyText) {
   const match = replyText.match(/<!--RIFF_RADAR_RECS:(\{.*?\})-->/s);
   if (!match) return { recs: [], followUpQuestion: '', cleanedReply: replyText };
@@ -41,16 +38,6 @@ function extractStructuredRecs(replyText) {
   };
 }
 
-// App-specific overrides layered on top of groovePrompt.js at request time.
-// None of this edits the persona file itself:
-//   1. No inline search links (RecommendationCard renders real links).
-//   2. When giving recommendations, the VISIBLE reply is trimmed to just the
-//      opening reflection — no per-song paragraphs, no closing question.
-//      Per-song detail and the refinement question move entirely into the
-//      hidden metadata block, so the app can render them in the intended
-//      order: reflection -> rec cards -> follow-up question. This also
-//      removes the duplication where the same explanation was written once
-//      in prose and once (shortened) in the JSON.
 function buildSystemBlocks(loreAddendum) {
   return [
     {
@@ -80,12 +67,14 @@ function buildSystemBlocks(loreAddendum) {
         `# Machine-readable recommendation metadata (internal, never shown to the user)\n` +
         `Whenever your reply includes the 3-recommendation block, end your entire response ` +
         `with exactly one HTML comment on its own line, after everything else, in this exact format:\n` +
-        `<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","explanation":"One to two short sentences on the musical link, the same detail you'd normally put in prose, no timestamp needed."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","explanation":"..."}],"followUpQuestion":"Your normal closing refinement question, offering two concrete directions."}-->\n` +
+        `<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","explanation":"One single sentence, 20 words or fewer, on the musical link."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","explanation":"..."}],"followUpQuestion":"Your normal closing refinement question, offering two concrete directions."}-->\n` +
         `"matchAxis" must be exactly one of: "Structural twin", "Adjacent genre", "Surprise pick", ` +
-        `matching which of the 3 slots each track fills. "explanation" is plain text, no markdown, ` +
-        `no links. "followUpQuestion" is plain text, no markdown. Do not include this comment if ` +
-        `your reply does not contain recommendations. This comment is stripped before the user ` +
-        `sees your reply, so none of it needs to fit your voice or formatting rules.`,
+        `matching which of the 3 slots each track fills. "explanation" MUST be exactly one ` +
+        `sentence, 20 words or fewer, plain text, no markdown, no links — pick the single most ` +
+        `important musical detail rather than trying to fit several. "followUpQuestion" is plain ` +
+        `text, no markdown. Do not include this comment if your reply does not contain ` +
+        `recommendations. This comment is stripped before the user sees your reply, so none of ` +
+        `it needs to fit your voice or formatting rules.`,
     },
   ];
 }

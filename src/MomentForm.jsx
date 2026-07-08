@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import YouTubeMomentPicker from './YouTubeMomentPicker';
+import { useState, useEffect } from 'react';
 
 // A pool of example moments spanning genres, from iconic to indie.
 // One is picked at random each time the form loads, so the placeholder
@@ -22,8 +21,6 @@ function getRandomExample() {
   return EXAMPLE_MOMENTS[Math.floor(Math.random() * EXAMPLE_MOMENTS.length)];
 }
 
-// Validates a single mm:ss timestamp (e.g. "3:20") or a range
-// like "2:15-2:45" / "2:15 - 2:45".
 function isValidTimestamp(value) {
   const trimmed = value.trim();
   const single = /^\d{1,2}:\d{2}$/;
@@ -31,24 +28,10 @@ function isValidTimestamp(value) {
   return single.test(trimmed) || range.test(trimmed);
 }
 
-// Strips any trailing period(s) from a field before we insert our own
-// punctuation. Artist/song names occasionally end in a period themselves
-// (e.g. "Bolden."), which previously produced "Bolden.." once the template
-// added its own period. This normalizes any field to have no trailing
-// punctuation, so we can always add exactly one closing mark ourselves.
 function stripTrailingPunctuation(value) {
   return value.trim().replace(/[.!?]+$/, '');
 }
 
-// Builds the message actually sent to Groove as the opening line of the
-// conversation. Two changes from the original version:
-//   1. Trailing punctuation on song/artist/description is normalized so we
-//      never end up with doubled periods.
-//   2. The closing "find me more music like this" now sits on its own
-//      paragraph (a blank line, markdown-style) instead of running directly
-//      into the description with no separator — both for how it reads to a
-//      human in the chat UI, and so Groove sees a clearly separated request
-//      rather than one long run-on sentence.
 function buildFormattedMessage({ song, artist, timestamp, whatCaughtYou }) {
   const cleanSong = stripTrailingPunctuation(song);
   const cleanArtist = stripTrailingPunctuation(artist);
@@ -61,9 +44,13 @@ function buildFormattedMessage({ song, artist, timestamp, whatCaughtYou }) {
   );
 }
 
-export default function MomentForm({ onSubmit }) {
-  // Picked once per form mount, not on every render, so the placeholder
-  // doesn't change while someone is still typing.
+// MomentForm no longer owns a YouTubeMomentPicker or any video-loaded state —
+// App.jsx owns the single shared picker (left column) and passes down
+// whatever the user captures there. Previously this component ALSO rendered
+// its own internal YouTubeMomentPicker with its own separate state, which is
+// what caused the duplicate "Watch this with me" picker to appear on screen:
+// two independent pickers, each unaware of the other.
+export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, titleGuess }) {
   const [example] = useState(getRandomExample);
 
   const [song, setSong] = useState('');
@@ -72,28 +59,32 @@ export default function MomentForm({ onSubmit }) {
   const [whatCaughtYou, setWhatCaughtYou] = useState('');
   const [error, setError] = useState('');
 
-  // True once a YouTube video has been loaded, used to switch to the
-  // side-by-side (video left, fields right) layout.
-  const [videoLoaded, setVideoLoaded] = useState(false);
-
-  // True if song/artist were just auto-filled from a YouTube title guess
-  // and haven't been touched by the user yet — used to show a visible
-  // "double check this" treatment rather than presenting a guess as fact.
   const [songIsGuess, setSongIsGuess] = useState(false);
   const [artistIsGuess, setArtistIsGuess] = useState(false);
 
-  function handleTitleGuessed({ artist: guessedArtist, song: guessedSong }) {
-    // Only fill fields the user hasn't already typed something into,
-    // so we never silently overwrite something they entered themselves.
+  // When the YouTube picker (owned by App.jsx) captures a timestamp,
+  // reflect it into this form's timestamp field.
+  useEffect(() => {
+    if (youtubeTimestamp) {
+      setTimestamp(youtubeTimestamp);
+    }
+  }, [youtubeTimestamp]);
+
+  // When App.jsx's picker guesses a title, fill song/artist here — but only
+  // if the user hasn't already typed something themselves, so we never
+  // silently overwrite a real entry with a guess.
+  useEffect(() => {
+    if (!titleGuess) return;
     if (!song.trim()) {
-      setSong(guessedSong);
+      setSong(titleGuess.song);
       setSongIsGuess(true);
     }
     if (!artist.trim()) {
-      setArtist(guessedArtist);
+      setArtist(titleGuess.artist);
       setArtistIsGuess(true);
     }
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [titleGuess]);
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -120,11 +111,17 @@ export default function MomentForm({ onSubmit }) {
     });
   }
 
-  const fields = (
-    <div>
-      <div>
+  return (
+    <form onSubmit={handleSubmit} className="moment-form-card">
+      <h2 className="moment-form-heading">Describe a moment</h2>
+      {videoLoaded && (
+        <p className="moment-form-hint">Pulled from the video on the left — check it over below.</p>
+      )}
+
+      <div className="moment-form-field">
         <label htmlFor="song">
-          Song title {songIsGuess && <span>(from the video title, double check this)</span>}
+          Song title{' '}
+          {songIsGuess && <span className="moment-form-guess-tag">(from the video title, double check this)</span>}
         </label>
         <input
           id="song"
@@ -138,9 +135,10 @@ export default function MomentForm({ onSubmit }) {
         />
       </div>
 
-      <div>
+      <div className="moment-form-field">
         <label htmlFor="artist">
-          Artist {artistIsGuess && <span>(from the video title, double check this)</span>}
+          Artist{' '}
+          {artistIsGuess && <span className="moment-form-guess-tag">(from the video title, double check this)</span>}
         </label>
         <input
           id="artist"
@@ -154,7 +152,7 @@ export default function MomentForm({ onSubmit }) {
         />
       </div>
 
-      <div>
+      <div className="moment-form-field">
         <label htmlFor="timestamp">Timestamp (mm:ss, or a range like 2:15-2:45)</label>
         <input
           id="timestamp"
@@ -165,9 +163,9 @@ export default function MomentForm({ onSubmit }) {
         />
       </div>
 
-      <div>
+      <div className="moment-form-field">
         <label htmlFor="whatCaughtYou">What caught you?</label>
-        <p>
+        <p className="moment-form-subtext">
           Take your time with this part. The more specific you are, the
           further I can take this in directions you wouldn't expect.
         </p>
@@ -180,39 +178,9 @@ export default function MomentForm({ onSubmit }) {
         />
       </div>
 
-      {error && <p>{error}</p>}
+      {error && <p className="moment-form-error">{error}</p>}
 
-      <button type="submit">Find me music like this</button>
-    </div>
-  );
-
-  return (
-    <form onSubmit={handleSubmit}>
-      <h2>Describe a moment</h2>
-
-      {!videoLoaded && (
-        <div>
-          <YouTubeMomentPicker
-            onTimestampCaptured={setTimestamp}
-            onTitleGuessed={handleTitleGuessed}
-            onVideoLoadedChange={setVideoLoaded}
-          />
-          {fields}
-        </div>
-      )}
-
-      {videoLoaded && (
-        <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
-          <div style={{ flex: '1 1 50%' }}>
-            <YouTubeMomentPicker
-              onTimestampCaptured={setTimestamp}
-              onTitleGuessed={handleTitleGuessed}
-              onVideoLoadedChange={setVideoLoaded}
-            />
-          </div>
-          <div style={{ flex: '1 1 50%' }}>{fields}</div>
-        </div>
-      )}
+      <button type="submit" className="moment-form-submit">Find me music like this</button>
     </form>
   );
 }

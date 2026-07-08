@@ -1,19 +1,115 @@
 /* riff-radar.css
-   Styles for the Week 5 rec-card redesign and the left-aligned chat layout.
-   Imported in App.jsx.
+   Styles for the Week 5 rec-card redesign, the left-aligned layout, and the
+   moment-form visual pass. Imported in App.jsx.
 */
+
+/* --- Global left-alignment ---
+   Overrides any inherited center-alignment (e.g. from App.css/index.css)
+   so headings, paragraphs, and form content read left-to-right consistently
+   across the whole app, not just inside chat. If text still appears
+   centered anywhere after this, check App.css/index.css for a broader
+   `text-align: center` rule on body/h1/h2/etc. and remove it there — this
+   file can only override elements it directly targets. */
+
+h1, h2, h3, p, label, .moment-form-card, .chat-message {
+  text-align: left;
+}
 
 /* --- Chat conversation: left-aligned, comfortable reading width --- */
 
 .chat-message {
   max-width: 640px;
-  text-align: left;
   margin: 0 0 1.5rem 0;
 }
 
 .chat-message p {
-  text-align: left;
   margin: 0.25rem 0;
+}
+
+/* --- Moment form: styled as a card, matching the rec-card visual language --- */
+
+.moment-form-card {
+  background: #ffffff;
+  border: 1px solid #e5e5e5;
+  border-radius: 12px;
+  padding: 20px 24px;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.moment-form-heading {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+}
+
+.moment-form-hint {
+  font-size: 13px;
+  color: #888;
+  margin: -8px 0 4px 0;
+}
+
+.moment-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.moment-form-field label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #444;
+}
+
+.moment-form-field input,
+.moment-form-field textarea {
+  font-size: 14px;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-family: inherit;
+}
+
+.moment-form-field input:focus,
+.moment-form-field textarea:focus {
+  outline: none;
+  border-color: #4a90d9;
+}
+
+.moment-form-subtext {
+  font-size: 12px;
+  color: #888;
+  margin: 0;
+}
+
+.moment-form-guess-tag {
+  font-size: 11px;
+  font-weight: 400;
+  color: #a86b00;
+}
+
+.moment-form-error {
+  font-size: 13px;
+  color: #c0392b;
+  margin: 0;
+}
+
+.moment-form-submit {
+  background: #1a1a1a;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+.moment-form-submit:hover {
+  background: #333;
 }
 
 /* --- Recommendation grid: 3 columns desktop, 1 column mobile --- */
@@ -41,7 +137,7 @@
   padding: 12px;
   display: flex;
   flex-direction: column;
-  min-width: 0; /* lets long titles/text truncate inside a grid column */
+  min-width: 0;
 }
 
 .rec-pill {
@@ -87,9 +183,6 @@
   margin: 0 0 8px 0;
 }
 
-/* Clamped by default; .expanded (toggled via the Read more button in
-   RecommendationCard.jsx) removes the clamp so the full explanation shows,
-   instead of hard-cutting text with no way to read the rest. */
 .rec-explanation {
   font-size: 12px;
   color: #555;
@@ -116,7 +209,6 @@
   cursor: pointer;
   margin: 0 0 12px 0;
   display: block;
-  text-align: left;
 }
 
 .rec-read-more:hover {
@@ -135,18 +227,14 @@
 .rec-links {
   display: flex;
   gap: 8px;
-  align-items: stretch; /* both buttons share the row's tallest height */
+  align-items: stretch;
 }
 
-/* "Apple Music" wraps to two lines while "Spotify" stays on one, so this
-   needs both horizontal AND vertical centering (not just text-align) plus
-   a shared min-height, or the two buttons visually mismatch. */
 .rec-link-button {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  text-align: center;
   min-height: 44px;
   font-size: 12px;
   padding: 6px 8px;
@@ -162,12 +250,8 @@
 
 /* --- Follow-up question, rendered below the rec grid --- */
 
-/* No explicit color here on purpose: the app's chat text (.chat-message p)
-   also sets no explicit color and relies on inheriting the page's dark-theme
-   text color. */
 .rec-followup {
   max-width: 640px;
   margin: 16px 0 0 0;
   font-size: 15px;
-  text-align: left;
 }
