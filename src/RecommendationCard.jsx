@@ -1,13 +1,12 @@
 import { useRef, useState } from 'react';
 
 // One recommendation card: match-axis pill, thumbnail art, title/artist,
-// year/genre, a clamped explanation, preview player, and two link buttons.
-// Designed to sit in a 3-column grid (see App.jsx) with all cards in a row
-// ending at the same height via flex + margin-top: auto on the button group.
+// year/genre, an expandable explanation, preview player, and two link
+// buttons. Designed to sit in a 3-column grid (see App.jsx).
 //
-// Expects a `rec` shaped like what validateAndEnrichRecs() produces, now
-// carrying the richer metadata Groove emits (matchAxis, genre, explanation)
-// alongside the iTunes-enriched fields:
+// Expects a `rec` shaped like what validateAndEnrichRecs() produces, carrying
+// Groove's metadata (matchAxis, genre, explanation) alongside the
+// iTunes-enriched fields:
 //   {
 //     track, artist, matchAxis, genre, explanation, releaseYear,
 //     itunesValidation: 'found' | 'not_found' | 'unconfirmed',
@@ -23,6 +22,7 @@ export default function RecommendationCard({ rec, onPreviewPlayed, onOutboundCli
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasLoggedPlay, setHasLoggedPlay] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const hasPreview = rec.itunesValidation === 'found' && !!rec.previewUrl;
   const hasAppleMusicLink = rec.itunesValidation === 'found' && !!rec.trackViewUrl;
@@ -67,7 +67,18 @@ export default function RecommendationCard({ rec, onPreviewPlayed, onOutboundCli
       <p className="rec-artist">{rec.artist}</p>
       {metaLine && <p className="rec-meta">{metaLine}</p>}
 
-      {rec.explanation && <p className="rec-explanation">{rec.explanation}</p>}
+      {rec.explanation && (
+        <>
+          <p className={`rec-explanation${expanded ? ' expanded' : ''}`}>{rec.explanation}</p>
+          <button
+            type="button"
+            className="rec-read-more"
+            onClick={() => setExpanded((e) => !e)}
+          >
+            {expanded ? 'Show less' : 'Read more'}
+          </button>
+        </>
+      )}
 
       <div className="rec-actions">
         {hasPreview && (

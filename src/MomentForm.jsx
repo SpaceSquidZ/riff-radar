@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { franc } from 'franc';
-import { getSessionId } from './sessionId';
-import { logEvent } from './supabaseClient';
+import YouTubeMomentPicker from './YouTubeMomentPicker';
 
+// A pool of example moments spanning genres, from iconic to indie.
+// One is picked at random each time the form loads, so the placeholder
+// text doesn't always anchor on the same song. Purely cosmetic — these
+// are never submitted, just shown as hints.
 const EXAMPLE_MOMENTS = [
   { song: 'Superposition', artist: 'Daniel Caesar', timestamp: '3:20', whatCaughtYou: 'the vocal stack that blooms open' },
   { song: 'Redbone', artist: 'Childish Gambino', timestamp: '2:10', whatCaughtYou: 'the guitar riff that just loops and loops' },
@@ -20,6 +22,8 @@ function getRandomExample() {
   return EXAMPLE_MOMENTS[Math.floor(Math.random() * EXAMPLE_MOMENTS.length)];
 }
 
+// Validates a single mm:ss timestamp (e.g. "3:20") or a range
+// like "2:15-2:45" / "2:15 - 2:45".
 function isValidTimestamp(value) {
   const trimmed = value.trim();
   const single = /^\d{1,2}:\d{2}$/;
@@ -27,52 +31,73 @@ function isValidTimestamp(value) {
   return single.test(trimmed) || range.test(trimmed);
 }
 
-function detectLanguage(text) {
-  if (!text || text.trim().length < 10) return null;
-  const result = franc(text.trim());
-  return result === 'und' ? null : result;
+// Strips any trailing period(s) from a field before we insert our own
+// punctuation. Artist/song names occasionally end in a period themselves
+// (e.g. "Bolden."), which previously produced "Bolden.." once the template
+// added its own period. This normalizes any field to have no trailing
+// punctuation, so we can always add exactly one closing mark ourselves.
+function stripTrailingPunctuation(value) {
+  return value.trim().replace(/[.!?]+$/, '');
 }
 
-// MomentForm no longer owns YouTubeMomentPicker — the player lives in
-// App.jsx so it can survive the form-to-chat transition. This component
-// receives timestamp and title-guess callbacks from App instead.
-export default function MomentForm({
-  onSubmit,
-  // Pre-filled timestamp from the YouTube picker (controlled by App)
-  youtubeTimestamp,
-  // Whether a video is currently loaded (controls layout)
-  videoLoaded,
-  // Song/artist guess from YouTube title parsing
-  titleGuess,
-}) {
+// Builds the message actually sent to Groove as the opening line of the
+// conversation. Two changes from the original version:
+//   1. Trailing punctuation on song/artist/description is normalized so we
+//      never end up with doubled periods.
+//   2. The closing "find me more music like this" now sits on its own
+//      paragraph (a blank line, markdown-style) instead of running directly
+//      into the description with no separator — both for how it reads to a
+//      human in the chat UI, and so Groove sees a clearly separated request
+//      rather than one long run-on sentence.
+function buildFormattedMessage({ song, artist, timestamp, whatCaughtYou }) {
+  const cleanSong = stripTrailingPunctuation(song);
+  const cleanArtist = stripTrailingPunctuation(artist);
+  const cleanDescription = stripTrailingPunctuation(whatCaughtYou);
+
+  return (
+    `I'm listening to ${cleanSong} by ${cleanArtist}. ` +
+    `At ${timestamp.trim()}, ${cleanDescription}.` +
+    `\n\nFind me more music like this.`
+  );
+}
+
+export default function MomentForm({ onSubmit }) {
+  // Picked once per form mount, not on every render, so the placeholder
+  // doesn't change while someone is still typing.
   const [example] = useState(getRandomExample);
+
   const [song, setSong] = useState('');
   const [artist, setArtist] = useState('');
   const [timestamp, setTimestamp] = useState('');
   const [whatCaughtYou, setWhatCaughtYou] = useState('');
   const [error, setError] = useState('');
+
+  // True once a YouTube video has been loaded, used to switch to the
+  // side-by-side (video left, fields right) layout.
+  const [videoLoaded, setVideoLoaded] = useState(false);
+
+  // True if song/artist were just auto-filled from a YouTube title guess
+  // and haven't been touched by the user yet — used to show a visible
+  // "double check this" treatment rather than presenting a guess as fact.
   const [songIsGuess, setSongIsGuess] = useState(false);
   const [artistIsGuess, setArtistIsGuess] = useState(false);
 
-  // Sync YouTube-captured timestamp into the local field.
-  // Using a ref pattern to avoid infinite loops from the prop changing.
-  const prevYoutubeTimestamp = useState(null);
-  if (youtubeTimestamp && youtubeTimestamp !== prevYoutubeTimestamp[0]) {
-    prevYoutubeTimestamp[1](youtubeTimestamp);
-    setTimestamp(youtubeTimestamp);
-  }
-
-  // Sync title guess from YouTube into song/artist fields,
-  // but only if the user hasn't already typed something there.
-  const prevTitleGuess = useState(null);
-  if (titleGuess && titleGuess !== prevTitleGuess[0]) {
-    prevTitleGuess[1](titleGuess);
-    if (!song.trim()) { setSong(titleGuess.song); setSongIsGuess(true); }
-    if (!artist.trim()) { setArtist(titleGuess.artist); setArtistIsGuess(true); }
+  function handleTitleGuessed({ artist: guessedArtist, song: guessedSong }) {
+    // Only fill fields the user hasn't already typed something into,
+    // so we never silently overwrite something they entered themselves.
+    if (!song.trim()) {
+      setSong(guessedSong);
+      setSongIsGuess(true);
+    }
+    if (!artist.trim()) {
+      setArtist(guessedArtist);
+      setArtistIsGuess(true);
+    }
   }
 
   function handleSubmit(e) {
     e.preventDefault();
+
     if (!song.trim() || !artist.trim() || !timestamp.trim() || !whatCaughtYou.trim()) {
       setError('All fields are required.');
       return;
@@ -81,22 +106,10 @@ export default function MomentForm({
       setError('Timestamp should be mm:ss (like 3:20) or a range (like 2:15-2:45).');
       return;
     }
+
     setError('');
 
-    const detectedLanguage = detectLanguage(whatCaughtYou);
-    const sessionId = getSessionId();
-    logEvent(sessionId, 'moment_submitted', {
-      song: song.trim(),
-      artist: artist.trim(),
-      timestamp: timestamp.trim(),
-      input_method: videoLoaded ? 'youtube' : 'manual',
-      language: detectedLanguage,
-    });
-
-    const formattedMessage =
-      `I'm listening to ${song.trim()} by ${artist.trim()}. ` +
-      `At ${timestamp.trim()}, ${whatCaughtYou.trim()} ` +
-      `Find me more music like this.`;
+    const formattedMessage = buildFormattedMessage({ song, artist, timestamp, whatCaughtYou });
 
     onSubmit({
       song: song.trim(),
@@ -104,36 +117,39 @@ export default function MomentForm({
       timestamp: timestamp.trim(),
       whatCaughtYou: whatCaughtYou.trim(),
       formattedMessage,
-      detectedLanguage,
     });
   }
 
-  return (
-    <form onSubmit={handleSubmit}>
-      <h2>Describe a moment</h2>
-
+  const fields = (
+    <div>
       <div>
         <label htmlFor="song">
-          Song title {songIsGuess && <span style={{ fontSize: '0.8em', opacity: 0.6 }}>(from the video title, double check this)</span>}
+          Song title {songIsGuess && <span>(from the video title, double check this)</span>}
         </label>
         <input
           id="song"
           type="text"
           value={song}
-          onChange={(e) => { setSong(e.target.value); setSongIsGuess(false); }}
+          onChange={(e) => {
+            setSong(e.target.value);
+            setSongIsGuess(false);
+          }}
           placeholder={example.song}
         />
       </div>
 
       <div>
         <label htmlFor="artist">
-          Artist {artistIsGuess && <span style={{ fontSize: '0.8em', opacity: 0.6 }}>(from the video title, double check this)</span>}
+          Artist {artistIsGuess && <span>(from the video title, double check this)</span>}
         </label>
         <input
           id="artist"
           type="text"
           value={artist}
-          onChange={(e) => { setArtist(e.target.value); setArtistIsGuess(false); }}
+          onChange={(e) => {
+            setArtist(e.target.value);
+            setArtistIsGuess(false);
+          }}
           placeholder={example.artist}
         />
       </div>
@@ -151,21 +167,52 @@ export default function MomentForm({
 
       <div>
         <label htmlFor="whatCaughtYou">What caught you?</label>
-        <p style={{ fontSize: '0.85em', opacity: 0.7, margin: '4px 0 8px 0' }}>
-          Take your time. The more specific, the more interesting where this goes.
+        <p>
+          Take your time with this part. The more specific you are, the
+          further I can take this in directions you wouldn't expect.
         </p>
         <textarea
           id="whatCaughtYou"
-          rows={6}
-          style={{ width: '100%', minHeight: '120px', padding: '12px', boxSizing: 'border-box' }}
+          rows={4}
           value={whatCaughtYou}
           onChange={(e) => setWhatCaughtYou(e.target.value)}
           placeholder={example.whatCaughtYou}
         />
       </div>
 
-      {error && <p style={{ color: 'red' }}>{error}</p>}
+      {error && <p>{error}</p>}
+
       <button type="submit">Find me music like this</button>
+    </div>
+  );
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <h2>Describe a moment</h2>
+
+      {!videoLoaded && (
+        <div>
+          <YouTubeMomentPicker
+            onTimestampCaptured={setTimestamp}
+            onTitleGuessed={handleTitleGuessed}
+            onVideoLoadedChange={setVideoLoaded}
+          />
+          {fields}
+        </div>
+      )}
+
+      {videoLoaded && (
+        <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
+          <div style={{ flex: '1 1 50%' }}>
+            <YouTubeMomentPicker
+              onTimestampCaptured={setTimestamp}
+              onTitleGuessed={handleTitleGuessed}
+              onVideoLoadedChange={setVideoLoaded}
+            />
+          </div>
+          <div style={{ flex: '1 1 50%' }}>{fields}</div>
+        </div>
+      )}
     </form>
   );
 }
