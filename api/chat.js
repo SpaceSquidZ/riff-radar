@@ -2,11 +2,14 @@
 //
 // Vercel serverless function. Takes a conversation history + session metadata,
 // streams Claude's reply back to the client chunk-by-chunk, validates any
-// recommendations against iTunes, drops anything that doesn't pass (no
-// retry round-trip — see note below), and logs events.
+// recommendations against iTunes, drops anything that doesn't pass, and
+// logs events.
 //
 // Response protocol (newline-delimited JSON, one object per line):
 //   {"type":"delta","text":"..."}                          — a chunk of Groove's visible reply
+//   {"type":"recs_starting"}                                — server has begun writing the
+//                                                              hidden rec metadata; recs ARE
+//                                                              coming for this reply
 //   {"type":"done","recs":[...],"followUpQuestion":"..."}  — stream finished
 //   {"type":"error","message":"..."}                        — something went wrong mid-stream
 //
@@ -39,14 +42,6 @@ function extractStructuredRecs(replyText) {
   };
 }
 
-// STATIC_APP_INSTRUCTIONS is identical on every single request — it doesn't
-// depend on lore stage, session count, or anything per-user. Previously
-// this whole block (plus the lore addendum) was ONE uncached system block,
-// meaning it got fully reprocessed as fresh input tokens on every call.
-// Splitting it into its own cache_control breakpoint means only the small,
-// genuinely-dynamic tail (lore stage + do-not-repeat list) is ever
-// processed uncached — this is likely the single biggest latency win
-// available here, bigger than any amount of trimming reply length.
 const STATIC_APP_INSTRUCTIONS = `# App-specific overrides for Riff Radar
 This app renders recommendations as visual cards (art, preview player, real Apple
 Music and Spotify links) and does not display raw links or per-song paragraphs in
@@ -98,25 +93,35 @@ function buildDynamicBlock(loreAddendum, previousRecommendations) {
   return loreText + doNotRepeatText;
 }
 
+// Both static blocks now use a 1-HOUR cache TTL instead of the 5-minute
+// default. Rationale: this is a conversational app where a real person
+// reads a reply, thinks, maybe listens to a preview, then responds — gaps
+// between actual API calls of more than 5 minutes are normal human
+// behavior, not an edge case. Under the 5-minute default, most real
+// conversational turns would miss the cache entirely and pay full
+// uncached processing cost (which is also the slow path) on nearly every
+// message. The 1-hour TTL costs more on the first write in a given
+// window (2x base price vs 1.25x) but every read within that hour is the
+// same 90%-cheaper, faster cached path — worth it for this usage pattern.
+const CACHE_CONTROL_1H = { type: 'ephemeral', ttl: '1h' };
+
 function buildSystemBlocks(loreAddendum, previousRecommendations) {
   return [
     {
       type: 'text',
       text: GROOVE_BASE_PROMPT,
-      cache_control: { type: 'ephemeral' },
+      cache_control: CACHE_CONTROL_1H,
     },
     {
       type: 'text',
       text: STATIC_APP_INSTRUCTIONS,
-      cache_control: { type: 'ephemeral' },
+      cache_control: CACHE_CONTROL_1H,
     },
     {
       type: 'text',
       text: buildDynamicBlock(loreAddendum, previousRecommendations),
-      // Deliberately NOT cached — this is the one block that actually
-      // changes per request (lore stage, growing do-not-repeat list), so
-      // caching it would provide no benefit and would need constant
-      // invalidation anyway.
+      // Deliberately uncached — the one block that actually changes per
+      // request (lore stage, growing do-not-repeat list).
     },
   ];
 }
@@ -162,6 +167,7 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
   let fullText = '';
   let emittedLength = 0;
   let commentStartIdx = -1;
+  let announcedRecsStarting = false;
   let stopReason = null;
 
   function processDeltaText(deltaText) {
@@ -172,6 +178,11 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
     }
 
     if (commentStartIdx !== -1) {
+      if (!announcedRecsStarting) {
+        announcedRecsStarting = true;
+        res.write(JSON.stringify({ type: 'recs_starting' }) + '\n');
+      }
+
       if (emittedLength < commentStartIdx) {
         const safe = fullText.slice(emittedLength, commentStartIdx);
         if (safe) res.write(JSON.stringify({ type: 'delta', text: safe }) + '\n');
@@ -240,8 +251,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'messages array is required' });
   }
 
-  // Defensive sanitization: Anthropic's API rejects any message object with
-  // fields beyond {role, content}.
   const messages = rawMessages.map(({ role, content }) => ({ role, content }));
 
   res.writeHead(200, {
@@ -275,14 +284,6 @@ export default async function handler(req, res) {
     if (recs.length > 0) {
       const validated = await validateAndEnrichRecs(recs);
 
-      // No retry round-trip. A track that fails validation (no real artist
-      // match, or no preview available) is simply dropped rather than
-      // spending a full extra Claude call trying to fix it — that retry
-      // was both slow (a full second generation + re-validation pass) and,
-      // per testing, didn't even reliably succeed: a replacement could
-      // itself fail validation and still ship broken. Showing 2 solid
-      // cards instead of 3 is a better outcome than either a broken card
-      // or a multi-second delay chasing a guaranteed third.
       enrichedRecs = validated.filter((r) => r.itunesValidation === 'found');
       const dropped = validated.filter((r) => r.itunesValidation === 'not_found');
 

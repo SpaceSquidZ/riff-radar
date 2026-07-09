@@ -21,8 +21,6 @@ function getRandomLoadingMessage() {
   return LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)];
 }
 
-const SKELETON_DELAY_MS = 700;
-
 export default function App() {
   const [phase, setPhase] = useState(hasSeenLanding() ? 'form' : 'landing');
   const [showConsent, setShowConsent] = useState(!hasSeenConsent());
@@ -91,14 +89,6 @@ export default function App() {
     });
   }
 
-  // Flattens every rec shown so far this session into a deduped
-  // {track, artist} list, sent to /api/chat so Groove knows not to repeat
-  // itself. This is the session's only "memory" of its own past
-  // recommendations until real accounts exist (Week 6) — necessary because
-  // stripping song titles out of Groove's VISIBLE reply (done for a
-  // cleaner chat) also erased them from what gets stored back into
-  // conversation history, so without this list Groove has no way to know
-  // what it already suggested.
   function collectPreviousRecommendations(msgs) {
     const seen = new Set();
     const list = [];
@@ -126,14 +116,6 @@ export default function App() {
       { role: 'assistant', content: '', recs: [], followUpQuestion: '', buildingRecs: false },
     ]);
 
-    let skeletonTimer = null;
-    function scheduleSkeletonCheck() {
-      clearTimeout(skeletonTimer);
-      skeletonTimer = setTimeout(() => {
-        updateLastMessage((msg) => ({ ...msg, buildingRecs: true }));
-      }, SKELETON_DELAY_MS);
-    }
-
     try {
       const sessionId = getSessionId();
       const apiMessages = newMessages.map(({ role, content }) => ({ role, content }));
@@ -156,8 +138,6 @@ export default function App() {
       const decoder = new TextDecoder();
       let buffer = '';
       let firstDeltaReceived = false;
-
-      scheduleSkeletonCheck();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -183,23 +163,10 @@ export default function App() {
               firstDeltaReceived = true;
               setLoading(false);
             }
-            // buildingRecs is explicitly reset to false here — previously
-            // it only ever got set to true (by the timeout below) and was
-            // never cleared until the whole response finished. That meant
-            // a single pause mid-stream (e.g. while Groove generates a
-            // longer explanatory answer) would flip the skeleton on and it
-            // would stay visually "stuck" showing until 'done' arrived,
-            // even once more text resumed — looking like cards flashed in
-            // and vanished. Any new text arriving means we're clearly not
-            // in the "waiting on cards" state, so clear it immediately.
-            updateLastMessage((msg) => ({
-              ...msg,
-              content: msg.content + event.text,
-              buildingRecs: false,
-            }));
-            scheduleSkeletonCheck();
+            updateLastMessage((msg) => ({ ...msg, content: msg.content + event.text }));
+          } else if (event.type === 'recs_starting') {
+            updateLastMessage((msg) => ({ ...msg, buildingRecs: true }));
           } else if (event.type === 'done') {
-            clearTimeout(skeletonTimer);
             updateLastMessage((msg) => ({
               ...msg,
               recs: event.recs || [],
@@ -207,7 +174,6 @@ export default function App() {
               buildingRecs: false,
             }));
           } else if (event.type === 'error') {
-            clearTimeout(skeletonTimer);
             updateLastMessage((msg) => ({
               ...msg,
               buildingRecs: false,
@@ -219,7 +185,6 @@ export default function App() {
         }
       }
     } catch (err) {
-      clearTimeout(skeletonTimer);
       console.error('sendMessage failed:', err);
       updateLastMessage((msg) => ({
         ...msg,
