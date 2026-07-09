@@ -20,6 +20,17 @@ import { GROOVE_BASE_PROMPT, getLoreAddendum } from '../src/groovePrompt.js';
 import { logEvent } from '../src/supabaseClient.js';
 import { validateAndEnrichRecs } from './lib/validateTracks.js';
 
+// Vercel kills a serverless function outright once it exceeds its max
+// execution duration — no error event, no graceful close, the connection
+// just drops. That would look exactly like a reply that silently stops
+// mid-stream with no error message. 60s is the max allowed on Vercel's
+// Hobby tier; raising it here gives real headroom for a slow upstream
+// call instead of leaving the default (much shorter) limit as an
+// invisible ceiling.
+export const config = {
+  maxDuration: 60,
+};
+
 const RECS_MARKER_START = '<!--';
 const HOLDBACK_CHARS = 24;
 
