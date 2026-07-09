@@ -21,11 +21,6 @@ function getRandomLoadingMessage() {
   return LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)];
 }
 
-// How long to wait with no new text arriving before showing the "building
-// your three tracks" skeleton. Resets on every delta, so it only fires
-// once the visible reply has genuinely stopped growing — this is the gap
-// between "text finished streaming" and "cards arrived" (iTunes validation
-// + occasional hallucination retry), which previously had zero feedback.
 const SKELETON_DELAY_MS = 700;
 
 export default function App() {
@@ -41,10 +36,6 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
 
-  // --- Shared audio player, used by every RecommendationCard on the page ---
-  // One <audio> element total, not one per card. Fixes: pressing play on
-  // card 2 previously had no way to know card 1's own <audio> was playing,
-  // since each card managed playback independently.
   const audioElRef = useRef(null);
   const [activePreviewKey, setActivePreviewKey] = useState(null);
   const loggedPreviewKeysRef = useRef(new Set());
@@ -100,9 +91,35 @@ export default function App() {
     });
   }
 
+  // Flattens every rec shown so far this session into a deduped
+  // {track, artist} list, sent to /api/chat so Groove knows not to repeat
+  // itself. This is the session's only "memory" of its own past
+  // recommendations until real accounts exist (Week 6) — necessary because
+  // stripping song titles out of Groove's VISIBLE reply (done for a
+  // cleaner chat) also erased them from what gets stored back into
+  // conversation history, so without this list Groove has no way to know
+  // what it already suggested.
+  function collectPreviousRecommendations(msgs) {
+    const seen = new Set();
+    const list = [];
+    for (const msg of msgs) {
+      if (msg.role !== 'assistant' || !Array.isArray(msg.recs)) continue;
+      for (const rec of msg.recs) {
+        const key = `${rec.track}::${rec.artist}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          list.push({ track: rec.track, artist: rec.artist });
+        }
+      }
+    }
+    return list;
+  }
+
   async function sendMessage(newMessages) {
     setLoading(true);
     setLoadingMessage(getRandomLoadingMessage());
+
+    const previousRecommendations = collectPreviousRecommendations(newMessages);
 
     setMessages([
       ...newMessages,
@@ -119,15 +136,16 @@ export default function App() {
 
     try {
       const sessionId = getSessionId();
-      // newMessages may include assistant messages carrying UI-only fields
-      // (recs, followUpQuestion, buildingRecs) attached after streaming.
-      // Anthropic's API only accepts {role, content} per message and
-      // rejects anything else with a 400 — strip down before sending.
       const apiMessages = newMessages.map(({ role, content }) => ({ role, content }));
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: apiMessages, sessionCount: 0, sessionId }),
+        body: JSON.stringify({
+          messages: apiMessages,
+          sessionCount: 0,
+          sessionId,
+          previousRecommendations,
+        }),
       });
 
       if (!response.ok || !response.body) {
@@ -139,7 +157,7 @@ export default function App() {
       let buffer = '';
       let firstDeltaReceived = false;
 
-      scheduleSkeletonCheck(); // in case the model is slow before ANY text
+      scheduleSkeletonCheck();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -165,8 +183,21 @@ export default function App() {
               firstDeltaReceived = true;
               setLoading(false);
             }
-            updateLastMessage((msg) => ({ ...msg, content: msg.content + event.text }));
-            scheduleSkeletonCheck(); // reset: still receiving text, not "done" yet
+            // buildingRecs is explicitly reset to false here — previously
+            // it only ever got set to true (by the timeout below) and was
+            // never cleared until the whole response finished. That meant
+            // a single pause mid-stream (e.g. while Groove generates a
+            // longer explanatory answer) would flip the skeleton on and it
+            // would stay visually "stuck" showing until 'done' arrived,
+            // even once more text resumed — looking like cards flashed in
+            // and vanished. Any new text arriving means we're clearly not
+            // in the "waiting on cards" state, so clear it immediately.
+            updateLastMessage((msg) => ({
+              ...msg,
+              content: msg.content + event.text,
+              buildingRecs: false,
+            }));
+            scheduleSkeletonCheck();
           } else if (event.type === 'done') {
             clearTimeout(skeletonTimer);
             updateLastMessage((msg) => ({
@@ -302,7 +333,7 @@ export default function App() {
 
                       {showSkeleton && (
                         <div className="rec-skeleton-wrap">
-                          <p className="rec-skeleton-label">Lining up your three tracks...</p>
+                          <p className="rec-skeleton-label">Lining up your tracks...</p>
                           <div className="rec-skeleton-grid">
                             <div className="rec-skeleton-card" />
                             <div className="rec-skeleton-card" />

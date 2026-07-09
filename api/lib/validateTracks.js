@@ -4,19 +4,46 @@
 // Call this from inside your /api/chat handler AFTER Claude returns
 // recommendations and BEFORE you send them to the user.
 //
-// This module does NOT call the Claude API itself — it just validates
-// and enriches tracks. Regenerating a replacement recommendation when
-// a track fails validation is your chat handler's job (see the
-// integration sketch at the bottom of this file).
+// Two changes from the original version:
+//   1. A track now only counts as "found" if it BOTH matches a real artist
+//      AND has a 30-second preview URL. A track with no preview renders as
+//      a broken-looking card (no artwork, no play button, no Apple Music
+//      link) — better to drop it and show fewer cards than ship one that
+//      looks half-broken.
+//   2. Artist matching is now lenient (case-insensitive, tolerant of
+//      "feat. X" / "ft. X" suffixes, substring match in either direction)
+//      instead of requiring exact string equality. Exact matching was
+//      producing false negatives on real tracks — e.g. Groove writing
+//      "eAeon feat. DEAN" when iTunes lists the artist as just "eAeon"
+//      was being treated as a hallucination when it wasn't one.
 
 const ITUNES_BASE = 'https://itunes.apple.com/search';
 
+function normalizeArtist(name) {
+  return (name || '')
+    .toLowerCase()
+    .replace(/\(feat[^)]*\)/g, '')
+    .replace(/\bfeat\.?\s.*$/, '')
+    .replace(/\bft\.?\s.*$/, '')
+    .replace(/\bfeaturing\s.*$/, '')
+    .trim();
+}
+
+function artistsMatch(a, b) {
+  const na = normalizeArtist(a);
+  const nb = normalizeArtist(b);
+  if (!na || !nb) return false;
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
 /**
- * Validates a single {track, artist} pair against iTunes and, if found,
- * enriches it with preview/artwork/link data.
+ * Validates a single {track, artist} pair against iTunes and, if a real
+ * match with a preview exists, enriches it with preview/artwork/link data.
  *
  * @param {{track: string, artist: string}} rec
- * @returns {Promise<{valid: boolean, enriched: object|null}>}
+ * @returns {Promise<{valid: boolean|null, enriched: object|null}>}
+ *   valid === null means the iTunes request itself failed (network/5xx),
+ *   which should NOT be treated as a hallucination signal.
  */
 export async function validateOneTrack(rec) {
   const term = `${rec.track} ${rec.artist}`;
@@ -25,9 +52,6 @@ export async function validateOneTrack(rec) {
   try {
     const response = await fetch(url);
     if (!response.ok) {
-      // Treat a transient iTunes failure as "couldn't confirm," not
-      // "definitely fake." See note in validateAndEnrichRecs below on
-      // how the caller should weigh this.
       return { valid: null, enriched: null };
     }
 
@@ -36,21 +60,18 @@ export async function validateOneTrack(rec) {
       return { valid: false, enriched: null };
     }
 
-    const norm = (s) => (s || '').toLowerCase().trim();
-    const match =
-      data.results.find((r) => norm(r.artistName) === norm(rec.artist)) || null;
+    const match = data.results.find((r) => artistsMatch(r.artistName, rec.artist)) || null;
 
-    if (!match) {
-      // iTunes found something for the search term, but nothing by the
-      // artist Groove named. That's exactly the misattribution case the
-      // PRD calls out (Section 7.1, hard rules) — treat as invalid.
+    if (!match || !match.previewUrl) {
+      // Either no real artist match, or a match with no preview available —
+      // both are treated as invalid per the "must have a preview" rule.
       return { valid: false, enriched: null };
     }
 
     return {
       valid: true,
       enriched: {
-        previewUrl: match.previewUrl || null,
+        previewUrl: match.previewUrl,
         artworkUrl: match.artworkUrl100 ? match.artworkUrl100.replace('100x100', '400x400') : null,
         trackViewUrl: match.trackViewUrl || null,
         releaseYear: match.releaseDate ? match.releaseDate.slice(0, 4) : null,
@@ -64,14 +85,14 @@ export async function validateOneTrack(rec) {
 
 /**
  * Validates and enriches an array of recommendations in parallel.
- * Returns the same array shape, each rec annotated with:
+ * Each rec is annotated with:
  *   - itunesValidation: 'found' | 'not_found' | 'unconfirmed'
  *   - previewUrl, artworkUrl, trackViewUrl, releaseYear (null if not found)
  *
- * Does NOT filter out failed recs or call Claude for replacements —
- * that decision belongs in your chat handler, because only it has the
- * conversation context needed to re-prompt Claude sensibly. This module
- * just tells you which recs failed.
+ * Callers should filter to itunesValidation === 'found' before display —
+ * this module intentionally does not do that filtering itself, since only
+ * the caller knows whether it wants to drop, retry, or otherwise handle
+ * anything that didn't pass.
  *
  * @param {Array<{track: string, artist: string}>} recs
  * @returns {Promise<Array>} enriched recs with validation status
@@ -92,38 +113,3 @@ export async function validateAndEnrichRecs(recs) {
   );
   return results;
 }
-
-/*
-INTEGRATION SKETCH for /api/chat.js
-------------------------------------
-After you parse Groove's 3 recommendations out of Claude's response:
-
-  import { validateAndEnrichRecs } from './lib/validateTracks.js';
-
-  let enrichedRecs = await validateAndEnrichRecs(parsedRecs);
-
-  const failed = enrichedRecs.filter(r => r.itunesValidation === 'not_found');
-
-  if (failed.length > 0) {
-    // Log the hallucination event (Supabase: itunes_validation_failed,
-    // per PRD Section 8 instrumentation plan).
-    await logEvent('itunes_validation_failed', { failed, sessionId });
-
-    // Silently re-prompt Claude for replacements only for the failed
-    // slots, reusing the same system prompt + conversation history,
-    // with an added user-invisible instruction like:
-    // "The following recommendations could not be verified and must be
-    // replaced with different, real tracks: [list]. Do not mention this
-    // to the user." Then re-validate the replacements once. Cap retries
-    // at 1 pass — don't loop indefinitely if Claude keeps hallucinating
-    // for a stubborn genre.
-  }
-
-  // 'unconfirmed' (iTunes request itself failed, e.g. timeout) should
-  // NOT be treated as a hallucination — don't burn a retry on it. Just
-  // ship the rec without a preview player and without a trackViewUrl
-  // link, same as the Risk 3 graceful-fallback behavior.
-
-  // Send enrichedRecs to the frontend as-is; RecommendationCard.jsx
-  // (see companion file) knows how to render found / not_found / unconfirmed.
-*/

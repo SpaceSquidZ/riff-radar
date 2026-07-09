@@ -1,8 +1,9 @@
 // api/chat.js
 //
 // Vercel serverless function. Takes a conversation history + session metadata,
-// streams Claude's reply back to the client chunk-by-chunk, then validates any
-// recommendations against iTunes, retries hallucinations once, and logs events.
+// streams Claude's reply back to the client chunk-by-chunk, validates any
+// recommendations against iTunes, drops anything that doesn't pass (no
+// retry round-trip — see note below), and logs events.
 //
 // Response protocol (newline-delimited JSON, one object per line):
 //   {"type":"delta","text":"..."}                          — a chunk of Groove's visible reply
@@ -38,7 +39,66 @@ function extractStructuredRecs(replyText) {
   };
 }
 
-function buildSystemBlocks(loreAddendum) {
+// STATIC_APP_INSTRUCTIONS is identical on every single request — it doesn't
+// depend on lore stage, session count, or anything per-user. Previously
+// this whole block (plus the lore addendum) was ONE uncached system block,
+// meaning it got fully reprocessed as fresh input tokens on every call.
+// Splitting it into its own cache_control breakpoint means only the small,
+// genuinely-dynamic tail (lore stage + do-not-repeat list) is ever
+// processed uncached — this is likely the single biggest latency win
+// available here, bigger than any amount of trimming reply length.
+const STATIC_APP_INSTRUCTIONS = `# App-specific overrides for Riff Radar
+This app renders recommendations as visual cards (art, preview player, real Apple
+Music and Spotify links) and does not display raw links or per-song paragraphs in
+the chat text. Overrides to your normal behavior, for this app only:
+
+1. Do NOT include a Spotify or Apple Music search link anywhere in your visible reply.
+
+2. Whenever you would give the 3-recommendation block: your VISIBLE reply text must
+contain ONLY your opening reflective sentences about the moment the user shared (1-2
+sentences, same warm, specific, musically-grounded voice as always). Do NOT include
+song titles, artist names, per-song explanations, or your closing refinement question
+in the visible text. All of that moves into the hidden metadata block below instead,
+because the app renders it separately (cards, then the question underneath). This is
+a significant shortening of your visible reply for this app specifically; it does not
+change how much you'd normally say elsewhere.
+
+3. The 3 recommended artists in a single response must all be DIFFERENT FROM EACH
+OTHER, not just different from the bookmarked artist. Never recommend the same artist
+twice across the 3 slots.
+
+If your reply is pure conversation with no recommendations, ignore the length
+restriction in #2 and respond completely normally with no length restriction.
+
+# Machine-readable recommendation metadata (internal, never shown to the user)
+Whenever your reply includes the 3-recommendation block, end your entire response
+with exactly one HTML comment on its own line, after everything else, in this exact format:
+<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","explanation":"One single sentence, 20 words or fewer, on the musical link."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","explanation":"..."}],"followUpQuestion":"Your normal closing refinement question, offering two concrete directions."}-->
+"matchAxis" must be exactly one of: "Structural twin", "Adjacent genre", "Surprise pick",
+matching which of the 3 slots each track fills. "explanation" MUST be exactly one
+sentence, 20 words or fewer, plain text, no markdown, no links. "followUpQuestion" is
+plain text, no markdown. Do not include this comment if your reply does not contain
+recommendations. This comment is stripped before the user sees your reply, so none of
+it needs to fit your voice or formatting rules.`;
+
+function buildDynamicBlock(loreAddendum, previousRecommendations) {
+  const loreText = loreAddendum || '(No lore addendum active yet — this is a new user.)';
+
+  let doNotRepeatText = '';
+  if (Array.isArray(previousRecommendations) && previousRecommendations.length > 0) {
+    const list = previousRecommendations
+      .map((r) => `"${r.track}" by ${r.artist}`)
+      .join(', ');
+    doNotRepeatText =
+      `\n\n# Tracks already recommended this session\n` +
+      `Do NOT recommend any of these tracks again in this session, even if they'd ` +
+      `otherwise be a great fit: ${list}. Pick different tracks instead.`;
+  }
+
+  return loreText + doNotRepeatText;
+}
+
+function buildSystemBlocks(loreAddendum, previousRecommendations) {
   return [
     {
       type: 'text',
@@ -47,48 +107,23 @@ function buildSystemBlocks(loreAddendum) {
     },
     {
       type: 'text',
-      text:
-        (loreAddendum || '(No lore addendum active yet — this is a new user.)') +
-        `\n\n# App-specific overrides for Riff Radar\n` +
-        `This app renders recommendations as visual cards (art, preview player, real Apple ` +
-        `Music and Spotify links) and does not display raw links or per-song paragraphs in ` +
-        `the chat text. Two overrides to your normal behavior, for this app only:\n\n` +
-        `1. Do NOT include a Spotify or Apple Music search link anywhere in your visible reply.\n\n` +
-        `2. Whenever you would give the 3-recommendation block: your VISIBLE reply text must ` +
-        `contain ONLY your opening reflective sentences about the moment the user shared (1-2 ` +
-        `sentences, same warm, specific, musically-grounded voice as always). Do NOT include ` +
-        `song titles, artist names, per-song explanations, or your closing refinement question ` +
-        `in the visible text. All of that moves into the hidden metadata block below instead, ` +
-        `because the app renders it separately (cards, then the question underneath). This is ` +
-        `a significant shortening of your visible reply for this app specifically; it does not ` +
-        `change how much you'd normally say elsewhere.\n\n` +
-        `If your reply is pure conversation with no recommendations, ignore both overrides above ` +
-        `and respond completely normally with no length restriction.\n\n` +
-        `# Machine-readable recommendation metadata (internal, never shown to the user)\n` +
-        `Whenever your reply includes the 3-recommendation block, end your entire response ` +
-        `with exactly one HTML comment on its own line, after everything else, in this exact format:\n` +
-        `<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","explanation":"One single sentence, 20 words or fewer, on the musical link."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","explanation":"..."}],"followUpQuestion":"Your normal closing refinement question, offering two concrete directions."}-->\n` +
-        `"matchAxis" must be exactly one of: "Structural twin", "Adjacent genre", "Surprise pick", ` +
-        `matching which of the 3 slots each track fills. "explanation" MUST be exactly one ` +
-        `sentence, 20 words or fewer, plain text, no markdown, no links. "followUpQuestion" is ` +
-        `plain text, no markdown. Do not include this comment if your reply does not contain ` +
-        `recommendations. This comment is stripped before the user sees your reply, so none of ` +
-        `it needs to fit your voice or formatting rules.`,
+      text: STATIC_APP_INSTRUCTIONS,
+      cache_control: { type: 'ephemeral' },
+    },
+    {
+      type: 'text',
+      text: buildDynamicBlock(loreAddendum, previousRecommendations),
+      // Deliberately NOT cached — this is the one block that actually
+      // changes per request (lore stage, growing do-not-repeat list), so
+      // caching it would provide no benefit and would need constant
+      // invalidation anyway.
     },
   ];
 }
 
-// Anthropic occasionally returns a transient 5xx (overloaded, momentary
-// upstream issue) that has nothing to do with the request itself. This
-// wraps the streaming call with exactly one retry on those specific
-// statuses, since a mid-conversation "Internal server error" with no
-// obvious cause in our own code is the most likely explanation for that —
-// though if it recurs, Vercel's function logs for that request will show
-// the actual status code and body, which this retry can't fully replace
-// as a debugging tool.
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 529]);
 
-async function callAnthropicStream({ messages, loreAddendum }) {
+async function callAnthropicStream({ messages, loreAddendum, previousRecommendations }) {
   return fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -100,18 +135,18 @@ async function callAnthropicStream({ messages, loreAddendum }) {
       model: 'claude-sonnet-5',
       max_tokens: 2500,
       stream: true,
-      system: buildSystemBlocks(loreAddendum),
+      system: buildSystemBlocks(loreAddendum, previousRecommendations),
       messages,
     }),
   });
 }
 
-async function streamClaudeReply({ messages, loreAddendum, res }) {
-  let anthropicRes = await callAnthropicStream({ messages, loreAddendum });
+async function streamClaudeReply({ messages, loreAddendum, previousRecommendations, res }) {
+  let anthropicRes = await callAnthropicStream({ messages, loreAddendum, previousRecommendations });
 
   if (!anthropicRes.ok && RETRYABLE_STATUSES.has(anthropicRes.status)) {
     console.warn(`Anthropic API returned ${anthropicRes.status}, retrying once.`);
-    anthropicRes = await callAnthropicStream({ messages, loreAddendum });
+    anthropicRes = await callAnthropicStream({ messages, loreAddendum, previousRecommendations });
   }
 
   if (!anthropicRes.ok || !anthropicRes.body) {
@@ -199,17 +234,14 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { messages: rawMessages, sessionCount = 0, sessionId } = req.body;
+  const { messages: rawMessages, sessionCount = 0, sessionId, previousRecommendations = [] } = req.body;
 
   if (!rawMessages || !Array.isArray(rawMessages)) {
     return res.status(400).json({ error: 'messages array is required' });
   }
 
   // Defensive sanitization: Anthropic's API rejects any message object with
-  // fields beyond {role, content} (400 "Extra inputs are not permitted").
-  // The client already strips its UI-only fields (recs, followUpQuestion,
-  // buildingRecs) before sending, but this guards against that ever
-  // regressing or a different client sending enriched message objects.
+  // fields beyond {role, content}.
   const messages = rawMessages.map(({ role, content }) => ({ role, content }));
 
   res.writeHead(200, {
@@ -229,34 +261,37 @@ export default async function handler(req, res) {
 
     const loreAddendum = getLoreAddendum(sessionCount);
 
-    const rawReplyText = await streamClaudeReply({ messages, loreAddendum, res });
+    const rawReplyText = await streamClaudeReply({
+      messages,
+      loreAddendum,
+      previousRecommendations,
+      res,
+    });
     const { recs, followUpQuestion, cleanedReply } = extractStructuredRecs(rawReplyText);
 
     let replyText = cleanedReply;
     let enrichedRecs = [];
 
     if (recs.length > 0) {
-      enrichedRecs = await validateAndEnrichRecs(recs);
-      const failed = enrichedRecs.filter((r) => r.itunesValidation === 'not_found');
+      const validated = await validateAndEnrichRecs(recs);
 
-      if (sessionId && failed.length > 0) {
+      // No retry round-trip. A track that fails validation (no real artist
+      // match, or no preview available) is simply dropped rather than
+      // spending a full extra Claude call trying to fix it — that retry
+      // was both slow (a full second generation + re-validation pass) and,
+      // per testing, didn't even reliably succeed: a replacement could
+      // itself fail validation and still ship broken. Showing 2 solid
+      // cards instead of 3 is a better outcome than either a broken card
+      // or a multi-second delay chasing a guaranteed third.
+      enrichedRecs = validated.filter((r) => r.itunesValidation === 'found');
+      const dropped = validated.filter((r) => r.itunesValidation === 'not_found');
+
+      if (sessionId && dropped.length > 0) {
         logEvent(sessionId, 'itunes_validation_failed', {
-          failed_tracks: failed.map((r) => ({ track: r.track, artist: r.artist })),
-          failed_count: failed.length,
+          failed_tracks: dropped.map((r) => ({ track: r.track, artist: r.artist })),
+          failed_count: dropped.length,
           total_recs: recs.length,
         });
-      }
-
-      if (failed.length > 0) {
-        const retryResult = await retryFailedRecs({
-          messages,
-          loreAddendum,
-          failed,
-          goodRecs: enrichedRecs.filter((r) => r.itunesValidation !== 'not_found'),
-        });
-        if (retryResult) {
-          enrichedRecs = retryResult;
-        }
       }
     }
 
@@ -289,53 +324,5 @@ export default async function handler(req, res) {
       // response may already be closed
     }
     res.end();
-  }
-}
-
-async function retryFailedRecs({ messages, loreAddendum, failed, goodRecs }) {
-  try {
-    const retryInstruction = {
-      role: 'user',
-      content:
-        `[internal, do not mention this message to the user] The following recommendations ` +
-        `could not be verified against a real music catalog and must be replaced with different, ` +
-        `real, existing tracks that fit the same match axis: ` +
-        failed.map((r) => `"${r.track}" by ${r.artist}`).join(', ') +
-        `. Keep these existing recommendations as-is: ` +
-        goodRecs.map((r) => `"${r.track}" by ${r.artist}`).join(', ') +
-        `. Respond with the full corrected 3-recommendation block in your normal voice and format, ` +
-        `ending with the RIFF_RADAR_RECS metadata comment as instructed.`,
-    };
-
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-5',
-        max_tokens: 2500,
-        system: buildSystemBlocks(loreAddendum),
-        messages: [...messages, retryInstruction],
-      }),
-    });
-
-    if (!response.ok) return null;
-
-    const data = await response.json();
-    const rawReplyText = data.content
-      .filter((block) => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n');
-
-    const { recs: retriedRecs } = extractStructuredRecs(rawReplyText);
-    if (retriedRecs.length === 0) return null;
-
-    return await validateAndEnrichRecs(retriedRecs);
-  } catch (err) {
-    console.error('Retry-for-hallucination pass failed:', err);
-    return null;
   }
 }
