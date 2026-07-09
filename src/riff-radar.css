@@ -25,12 +25,10 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   color: #ffffff;
 }
 
-/* --- Moment form: card matching the rec-card visual language ---
-   Every piece of text and every input inside this card gets an EXPLICIT
-   color/background, rather than relying on inheritance. That's what was
-   causing two bugs: the heading rendering invisible (light-on-white) and
-   the inputs rendering dark-on-dark inside a white card, both because they
-   were silently inheriting colors meant for the page's dark background. */
+/* --- Card container, shared by MomentForm.jsx and YouTubeMomentPicker.jsx ---
+   Every piece of text and every input inside gets an EXPLICIT color rather
+   than relying on inheritance, since this card sits on a dark page
+   background and needs its own light-mode colors regardless. */
 
 .moment-form-card {
   background: #ffffff;
@@ -125,6 +123,77 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   background: #333;
 }
 
+/* One-line intro shown above the moment-form card, replacing what used to
+   be a second, redundant heading ("Type it yourself" stacked directly
+   above "Describe a moment"). */
+.section-intro-line {
+  font-size: 0.85em;
+  opacity: 0.7;
+  margin: 0 0 1rem 0;
+  color: #e8e8e8;
+}
+
+/* --- Shared card input/button styles, used by both MomentForm.jsx and
+   YouTubeMomentPicker.jsx now that both sit inside .moment-form-card --- */
+
+.card-text-input {
+  width: 100%;
+  font-size: 14px;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-family: inherit;
+  background: #ffffff;
+  color: #1a1a1a;
+  margin-bottom: 10px;
+  box-sizing: border-box;
+}
+
+.card-text-input::placeholder {
+  color: #999;
+}
+
+.card-button-primary {
+  background: #1a1a1a;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.card-button-primary:hover {
+  background: #333;
+}
+
+.card-button-secondary {
+  background: #f0f0f0;
+  color: #1a1a1a;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.card-button-secondary:hover {
+  background: #e5e5e5;
+}
+
+.youtube-player-embed {
+  margin-bottom: 12px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.youtube-mark-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
 /* --- Recommendation grid --- */
 
 .rec-grid {
@@ -141,9 +210,7 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   }
 }
 
-/* --- Skeleton shown while cards are being validated/built ---
-   Fills the gap between "Groove's text finished" and "cards rendered",
-   which was previously a silent few seconds with no feedback at all. */
+/* --- Skeleton shown while cards are being validated/built --- */
 
 .rec-skeleton-wrap {
   margin-top: 12px;
@@ -286,11 +353,6 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   align-items: stretch;
 }
 
-/* text-align: center is required IN ADDITION to justify-content: center —
-   justify-content centers the block as a whole; text-align centers each
-   individual wrapped line ("Apple" / "Music") within it. Dropping
-   text-align when this became a flex container was the earlier bug.
-   Font size bumped 12px -> 13px per feedback that buttons felt under-filled. */
 .rec-link-button {
   flex: 1;
   display: flex;

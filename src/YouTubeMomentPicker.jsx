@@ -21,16 +21,20 @@ function secondsToTimestamp(totalSeconds) {
 
 function guessArtistAndSongFromTitle(rawTitle) {
   if (!rawTitle) return null;
+
   let cleaned = rawTitle
     .replace(/\(.*?(official|video|audio|lyrics?|visualizer|hd|4k).*?\)/gi, '')
     .replace(/\[.*?(official|video|audio|lyrics?|visualizer|hd|4k).*?\]/gi, '')
     .replace(/\s*-\s*topic\s*$/i, '')
     .trim();
+
   const separators = [' - ', ' \u2013 ', ' \u2014 ', ' | '];
   for (const sep of separators) {
     if (cleaned.includes(sep)) {
       const [first, second] = cleaned.split(sep);
-      if (first && second) return { artist: first.trim(), song: second.trim() };
+      if (first && second) {
+        return { artist: first.trim(), song: second.trim() };
+      }
     }
   }
   return null;
@@ -40,6 +44,7 @@ let apiLoadPromise = null;
 function loadYouTubeApi() {
   if (window.YT && window.YT.Player) return Promise.resolve();
   if (apiLoadPromise) return apiLoadPromise;
+
   apiLoadPromise = new Promise((resolve) => {
     const tag = document.createElement('script');
     tag.src = 'https://www.youtube.com/iframe_api';
@@ -49,14 +54,7 @@ function loadYouTubeApi() {
   return apiLoadPromise;
 }
 
-export default function YouTubeMomentPicker({
-  onTimestampCaptured,
-  onTitleGuessed,
-  onVideoLoadedChange,
-  // showControls: false hides the mark/use buttons (post-submission mode
-  // where the video stays visible but marking is no longer the primary action)
-  showControls = true,
-}) {
+export default function YouTubeMomentPicker({ onTimestampCaptured, onTitleGuessed, onVideoLoadedChange }) {
   const [url, setUrl] = useState('');
   const [videoId, setVideoId] = useState(null);
   const [error, setError] = useState('');
@@ -77,22 +75,9 @@ export default function YouTubeMomentPicker({
     if (onVideoLoadedChange) onVideoLoadedChange(true);
   }
 
-  // Remove video — resets to the URL input state and notifies parent.
-  function handleRemoveVideo() {
-    if (playerRef.current && playerRef.current.destroy) {
-      playerRef.current.destroy();
-      playerRef.current = null;
-    }
-    setVideoId(null);
-    setUrl('');
-    setStartMark(null);
-    setEndMark(null);
-    setError('');
-    if (onVideoLoadedChange) onVideoLoadedChange(false);
-  }
-
   useEffect(() => {
     if (!videoId) return;
+
     let player;
     let cancelled = false;
 
@@ -104,22 +89,31 @@ export default function YouTubeMomentPicker({
             videoId,
             playerVars: { rel: 0 },
             events: {
-              onError: () => setError('This video could not be loaded. It may be restricted from embedding.'),
+              onError: (e) => {
+                console.error('YouTube player error:', e);
+                setError('This video could not be loaded. It may be restricted from embedding.');
+              },
               onReady: (e) => {
                 try {
                   const data = e.target.getVideoData();
                   const guess = guessArtistAndSongFromTitle(data && data.title);
                   if (guess && onTitleGuessed) onTitleGuessed(guess);
-                } catch {}
+                } catch (err) {
+                  // Title guessing is best-effort only.
+                }
               },
             },
           });
           playerRef.current = player;
-        } catch {
+        } catch (err) {
+          console.error('Failed to create YouTube player:', err);
           setError('Something went wrong loading the video player.');
         }
       })
-      .catch(() => setError('Could not load the YouTube player. Check your connection and try again.'));
+      .catch((err) => {
+        console.error('Failed to load YouTube IFrame API:', err);
+        setError('Could not load the YouTube player. Check your connection and try again.');
+      });
 
     return () => {
       cancelled = true;
@@ -154,61 +148,55 @@ export default function YouTubeMomentPicker({
       endMark !== null
         ? `${secondsToTimestamp(startMark)}-${secondsToTimestamp(endMark)}`
         : secondsToTimestamp(startMark);
+
     onTimestampCaptured(timestamp);
   }
 
   return (
-    <div>
+    <div className="moment-form-card">
       {!videoId && (
         <div>
-          <h3>Watch this with me</h3>
-          <p style={{ fontSize: '0.85em', opacity: 0.7, margin: '0 0 12px 0' }}>
+          <h3 className="moment-form-heading">Find it in a video</h3>
+          <p className="moment-form-hint">
             Paste a video and find your moment together. I'll be right here.
           </p>
           <input
             type="text"
+            className="card-text-input"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleLoadVideo()}
             placeholder="Paste a YouTube link"
           />
-          <button type="button" onClick={handleLoadVideo}>Load video</button>
+          <button type="button" className="card-button-primary" onClick={handleLoadVideo}>
+            Load video
+          </button>
         </div>
       )}
 
-      {error && <p style={{ color: 'red', fontSize: '0.85em' }}>{error}</p>}
+      {error && <p className="moment-form-error">{error}</p>}
 
       {videoId && (
         <div>
-          <div id="youtube-player-container"></div>
+          <div id="youtube-player-container" className="youtube-player-embed"></div>
 
-          {/* Remove video button — always visible once a video is loaded */}
-          <button
-            type="button"
-            onClick={handleRemoveVideo}
-            style={{ fontSize: '0.8em', opacity: 0.6, marginTop: '8px' }}
-          >
-            Remove video
+          <div className="youtube-mark-buttons">
+            <button type="button" className="card-button-secondary" onClick={markStart}>
+              Mark start {startMark !== null && `(${secondsToTimestamp(startMark)})`}
+            </button>
+            <button type="button" className="card-button-secondary" onClick={markEnd}>
+              Mark end {endMark !== null && `(${secondsToTimestamp(endMark)})`}
+            </button>
+          </div>
+
+          <p className="moment-form-subtext">
+            Marking just a start point captures a single instant. Marking both
+            start and end captures a range.
+          </p>
+
+          <button type="button" className="card-button-primary" onClick={useThisMoment}>
+            Use this moment
           </button>
-
-          {/* Mark controls — only shown in pre-submission mode */}
-          {showControls && (
-            <div style={{ marginTop: '8px' }}>
-              <button type="button" onClick={markStart}>
-                Mark start {startMark !== null && `(${secondsToTimestamp(startMark)})`}
-              </button>
-              <button type="button" onClick={markEnd}>
-                Mark end {endMark !== null && `(${secondsToTimestamp(endMark)})`}
-              </button>
-              <p style={{ fontSize: '0.8em', opacity: 0.7 }}>
-                Marking just a start point captures a single instant. Marking both
-                start and end captures a range.
-              </p>
-              <button type="button" onClick={useThisMoment}>
-                Use this moment
-              </button>
-            </div>
-          )}
         </div>
       )}
     </div>

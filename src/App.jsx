@@ -246,7 +246,6 @@ export default function App() {
               onTimestampCaptured={setYoutubeTimestamp}
               onTitleGuessed={setTitleGuess}
               onVideoLoadedChange={setVideoLoaded}
-              showControls={phase === 'form'}
             />
             {phase === 'chat' && videoLoaded && (
               <p style={{ fontSize: '0.8em', opacity: 0.6, marginTop: '8px' }}>
@@ -259,12 +258,9 @@ export default function App() {
             {phase === 'form' && (
               <>
                 {!videoLoaded && (
-                  <div style={{ marginBottom: '1rem' }}>
-                    <h3 style={{ margin: '0 0 4px 0' }}>Type it yourself</h3>
-                    <p style={{ fontSize: '0.85em', opacity: 0.7, margin: 0 }}>
-                      Already know the moment? Fill in the details below.
-                    </p>
-                  </div>
+                  <p className="section-intro-line">
+                    Already know the song? Fill it in below.
+                  </p>
                 )}
                 <MomentForm
                   onSubmit={handleMomentSubmit}
