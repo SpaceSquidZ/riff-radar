@@ -70,17 +70,26 @@ function buildSystemBlocks(loreAddendum) {
         `<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","explanation":"One single sentence, 20 words or fewer, on the musical link."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","explanation":"..."}],"followUpQuestion":"Your normal closing refinement question, offering two concrete directions."}-->\n` +
         `"matchAxis" must be exactly one of: "Structural twin", "Adjacent genre", "Surprise pick", ` +
         `matching which of the 3 slots each track fills. "explanation" MUST be exactly one ` +
-        `sentence, 20 words or fewer, plain text, no markdown, no links — pick the single most ` +
-        `important musical detail rather than trying to fit several. "followUpQuestion" is plain ` +
-        `text, no markdown. Do not include this comment if your reply does not contain ` +
+        `sentence, 20 words or fewer, plain text, no markdown, no links. "followUpQuestion" is ` +
+        `plain text, no markdown. Do not include this comment if your reply does not contain ` +
         `recommendations. This comment is stripped before the user sees your reply, so none of ` +
         `it needs to fit your voice or formatting rules.`,
     },
   ];
 }
 
-async function streamClaudeReply({ messages, loreAddendum, res }) {
-  const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
+// Anthropic occasionally returns a transient 5xx (overloaded, momentary
+// upstream issue) that has nothing to do with the request itself. This
+// wraps the streaming call with exactly one retry on those specific
+// statuses, since a mid-conversation "Internal server error" with no
+// obvious cause in our own code is the most likely explanation for that —
+// though if it recurs, Vercel's function logs for that request will show
+// the actual status code and body, which this retry can't fully replace
+// as a debugging tool.
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 529]);
+
+async function callAnthropicStream({ messages, loreAddendum }) {
+  return fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -95,11 +104,20 @@ async function streamClaudeReply({ messages, loreAddendum, res }) {
       messages,
     }),
   });
+}
+
+async function streamClaudeReply({ messages, loreAddendum, res }) {
+  let anthropicRes = await callAnthropicStream({ messages, loreAddendum });
+
+  if (!anthropicRes.ok && RETRYABLE_STATUSES.has(anthropicRes.status)) {
+    console.warn(`Anthropic API returned ${anthropicRes.status}, retrying once.`);
+    anthropicRes = await callAnthropicStream({ messages, loreAddendum });
+  }
 
   if (!anthropicRes.ok || !anthropicRes.body) {
     const errorBody = await anthropicRes.text().catch(() => '');
-    console.error('Anthropic API error:', anthropicRes.status, errorBody);
-    throw new Error(`Claude API request failed (${anthropicRes.status})`);
+    console.error('Anthropic API error after retry:', anthropicRes.status, errorBody);
+    throw new Error(`Claude API request failed (${anthropicRes.status}): ${errorBody.slice(0, 500)}`);
   }
 
   const reader = anthropicRes.body.getReader();
@@ -158,6 +176,8 @@ async function streamClaudeReply({ messages, loreAddendum, res }) {
         processDeltaText(payload.delta.text);
       } else if (payload.type === 'message_delta' && payload.delta?.stop_reason) {
         stopReason = payload.delta.stop_reason;
+      } else if (payload.type === 'error') {
+        console.error('Anthropic in-stream error event:', payload.error);
       }
     }
   }
@@ -252,7 +272,12 @@ export default async function handler(req, res) {
   } catch (err) {
     console.error('Error in /api/chat:', err);
     try {
-      res.write(JSON.stringify({ type: 'error', message: 'Internal server error' }) + '\n');
+      res.write(
+        JSON.stringify({
+          type: 'error',
+          message: 'Groove hit a snag putting that together. Mind trying that message again?',
+        }) + '\n'
+      );
     } catch {
       // response may already be closed
     }

@@ -1,53 +1,39 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-// One recommendation card: match-axis pill, thumbnail art, title/artist,
-// year/genre, an expandable explanation, preview player, and two link
-// buttons. Designed to sit in a 3-column grid (see App.jsx).
+// One recommendation card. Playback is now controlled by the PARENT
+// (App.jsx owns one shared <audio> element for the whole page) instead of
+// each card managing its own <audio> — that's what previously let two
+// cards' previews play simultaneously, since pressing play on card 2 had
+// no way to know card 1's audio existed. Card just reflects isPlaying and
+// asks the parent to toggle playback.
 //
-// Expects a `rec` shaped like what validateAndEnrichRecs() produces, carrying
-// Groove's metadata (matchAxis, genre, explanation) alongside the
-// iTunes-enriched fields:
-//   {
-//     track, artist, matchAxis, genre, explanation, releaseYear,
-//     itunesValidation: 'found' | 'not_found' | 'unconfirmed',
-//     previewUrl, artworkUrl, trackViewUrl,
-//   }
+// Expects:
+//   rec: { track, artist, matchAxis, genre, explanation, releaseYear,
+//          itunesValidation, previewUrl, artworkUrl, trackViewUrl }
+//   isPlaying: boolean — whether THIS card's preview is the one currently playing
+//   onTogglePlay: () => void — ask the parent to play/pause this card's preview
+//   onOutboundClick: ({track, artist, service, url}) => void
 
 function spotifySearchUrl(track, artist) {
   const q = encodeURIComponent(`${track} ${artist}`);
   return `https://open.spotify.com/search/${q}`;
 }
 
-export default function RecommendationCard({ rec, onPreviewPlayed, onOutboundClick }) {
-  const audioRef = useRef(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [hasLoggedPlay, setHasLoggedPlay] = useState(false);
+export default function RecommendationCard({ rec, isPlaying, onTogglePlay, onOutboundClick }) {
   const [expanded, setExpanded] = useState(false);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const explanationRef = useRef(null);
 
   const hasPreview = rec.itunesValidation === 'found' && !!rec.previewUrl;
   const hasAppleMusicLink = rec.itunesValidation === 'found' && !!rec.trackViewUrl;
 
-  function togglePlay() {
-    if (!audioRef.current) return;
-
-    if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-      return;
+  useEffect(() => {
+    if (explanationRef.current) {
+      const el = explanationRef.current;
+      setIsOverflowing(el.scrollHeight > el.clientHeight + 1);
     }
-
-    audioRef.current.play();
-    setIsPlaying(true);
-
-    if (!hasLoggedPlay) {
-      setHasLoggedPlay(true);
-      onPreviewPlayed?.({ track: rec.track, artist: rec.artist });
-    }
-  }
-
-  function handleAudioEnded() {
-    setIsPlaying(false);
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rec.explanation]);
 
   function logOutbound(service, url) {
     onOutboundClick?.({ track: rec.track, artist: rec.artist, service, url });
@@ -69,30 +55,29 @@ export default function RecommendationCard({ rec, onPreviewPlayed, onOutboundCli
 
       {rec.explanation && (
         <>
-          <p className={`rec-explanation${expanded ? ' expanded' : ''}`}>{rec.explanation}</p>
-          <button
-            type="button"
-            className="rec-read-more"
-            onClick={() => setExpanded((e) => !e)}
+          <p
+            ref={explanationRef}
+            className={`rec-explanation${expanded ? ' expanded' : ''}`}
           >
-            {expanded ? 'Show less' : 'Read more'}
-          </button>
+            {rec.explanation}
+          </p>
+          {isOverflowing && (
+            <button
+              type="button"
+              className="rec-read-more"
+              onClick={() => setExpanded((e) => !e)}
+            >
+              {expanded ? 'Show less' : 'Read more'}
+            </button>
+          )}
         </>
       )}
 
       <div className="rec-actions">
         {hasPreview && (
-          <div className="rec-preview">
-            <audio
-              ref={audioRef}
-              src={rec.previewUrl}
-              onEnded={handleAudioEnded}
-              preload="none"
-            />
-            <button type="button" onClick={togglePlay} className="rec-play-button">
-              {isPlaying ? 'Pause preview' : 'Play 30s preview'}
-            </button>
-          </div>
+          <button type="button" onClick={onTogglePlay} className="rec-play-button">
+            {isPlaying ? 'Pause preview' : 'Play 30s preview'}
+          </button>
         )}
 
         <div className="rec-links">

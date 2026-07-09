@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import LandingScreen, { hasSeenLanding } from './LandingScreen';
 import ConsentBanner, { hasSeenConsent } from './ConsentBanner';
 import MomentForm from './MomentForm';
@@ -21,13 +21,12 @@ function getRandomLoadingMessage() {
   return LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)];
 }
 
-// App owns four phases:
-//   'landing'  — first-visit intro screen (skipped on return visits)
-//   'form'     — moment input form
-//   'chat'     — Groove conversation post-submission
-//
-// YouTubeMomentPicker lives here (not inside MomentForm) so the player
-// survives the form-to-chat transition and stays visible post-submission.
+// How long to wait with no new text arriving before showing the "building
+// your three tracks" skeleton. Resets on every delta, so it only fires
+// once the visible reply has genuinely stopped growing — this is the gap
+// between "text finished streaming" and "cards arrived" (iTunes validation
+// + occasional hallucination retry), which previously had zero feedback.
+const SKELETON_DELAY_MS = 700;
 
 export default function App() {
   const [phase, setPhase] = useState(hasSeenLanding() ? 'form' : 'landing');
@@ -41,6 +40,51 @@ export default function App() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
+
+  // --- Shared audio player, used by every RecommendationCard on the page ---
+  // One <audio> element total, not one per card. Fixes: pressing play on
+  // card 2 previously had no way to know card 1's own <audio> was playing,
+  // since each card managed playback independently.
+  const audioElRef = useRef(null);
+  const [activePreviewKey, setActivePreviewKey] = useState(null);
+  const loggedPreviewKeysRef = useRef(new Set());
+
+  useEffect(() => {
+    const audio = new Audio();
+    audio.addEventListener('ended', () => setActivePreviewKey(null));
+    audioElRef.current = audio;
+    return () => {
+      audio.pause();
+      audio.src = '';
+    };
+  }, []);
+
+  function previewKeyFor(rec) {
+    return `${rec.track}::${rec.artist}`;
+  }
+
+  function handleTogglePlay(rec) {
+    const audio = audioElRef.current;
+    if (!audio) return;
+    const key = previewKeyFor(rec);
+
+    if (activePreviewKey === key) {
+      audio.pause();
+      setActivePreviewKey(null);
+      return;
+    }
+
+    audio.pause();
+    audio.src = rec.previewUrl;
+    audio.play();
+    setActivePreviewKey(key);
+
+    if (!loggedPreviewKeysRef.current.has(key)) {
+      loggedPreviewKeysRef.current.add(key);
+      const sessionId = getSessionId();
+      logEvent(sessionId, 'preview_played', { track: rec.track, artist: rec.artist });
+    }
+  }
 
   useEffect(() => {
     const sessionId = getSessionId();
@@ -60,9 +104,18 @@ export default function App() {
     setLoading(true);
     setLoadingMessage(getRandomLoadingMessage());
 
-    // recs and followUpQuestion both start empty and get filled in once
-    // the stream's final 'done' event arrives.
-    setMessages([...newMessages, { role: 'assistant', content: '', recs: [], followUpQuestion: '' }]);
+    setMessages([
+      ...newMessages,
+      { role: 'assistant', content: '', recs: [], followUpQuestion: '', buildingRecs: false },
+    ]);
+
+    let skeletonTimer = null;
+    function scheduleSkeletonCheck() {
+      clearTimeout(skeletonTimer);
+      skeletonTimer = setTimeout(() => {
+        updateLastMessage((msg) => ({ ...msg, buildingRecs: true }));
+      }, SKELETON_DELAY_MS);
+    }
 
     try {
       const sessionId = getSessionId();
@@ -80,6 +133,8 @@ export default function App() {
       const decoder = new TextDecoder();
       let buffer = '';
       let firstDeltaReceived = false;
+
+      scheduleSkeletonCheck(); // in case the model is slow before ANY text
 
       while (true) {
         const { done, value } = await reader.read();
@@ -106,24 +161,36 @@ export default function App() {
               setLoading(false);
             }
             updateLastMessage((msg) => ({ ...msg, content: msg.content + event.text }));
+            scheduleSkeletonCheck(); // reset: still receiving text, not "done" yet
           } else if (event.type === 'done') {
+            clearTimeout(skeletonTimer);
             updateLastMessage((msg) => ({
               ...msg,
               recs: event.recs || [],
               followUpQuestion: event.followUpQuestion || '',
+              buildingRecs: false,
             }));
           } else if (event.type === 'error') {
+            clearTimeout(skeletonTimer);
             updateLastMessage((msg) => ({
               ...msg,
-              content: msg.content || `Error: ${event.message}`,
+              buildingRecs: false,
+              content:
+                msg.content ||
+                'Groove hit a snag putting that together. Mind trying that message again?',
             }));
           }
         }
       }
     } catch (err) {
+      clearTimeout(skeletonTimer);
+      console.error('sendMessage failed:', err);
       updateLastMessage((msg) => ({
         ...msg,
-        content: msg.content || 'Error: ' + err.message,
+        buildingRecs: false,
+        content:
+          msg.content ||
+          'Groove hit a snag putting that together. Mind trying that message again?',
       }));
     } finally {
       setLoading(false);
@@ -143,11 +210,6 @@ export default function App() {
     setMessages(newMessages);
     setInput('');
     sendMessage(newMessages);
-  }
-
-  function handlePreviewPlayed({ track, artist }) {
-    const sessionId = getSessionId();
-    logEvent(sessionId, 'preview_played', { track, artist });
   }
 
   function handleOutboundClick({ track, artist, service, url }) {
@@ -223,10 +285,26 @@ export default function App() {
 
                   if (isStreamingPlaceholder) return null;
 
+                  const showSkeleton =
+                    msg.role === 'assistant' &&
+                    msg.buildingRecs &&
+                    (!msg.recs || msg.recs.length === 0);
+
                   return (
                     <div key={i} className="chat-message">
                       <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong>
                       <MessageContent content={msg.content} />
+
+                      {showSkeleton && (
+                        <div className="rec-skeleton-wrap">
+                          <p className="rec-skeleton-label">Lining up your three tracks...</p>
+                          <div className="rec-skeleton-grid">
+                            <div className="rec-skeleton-card" />
+                            <div className="rec-skeleton-card" />
+                            <div className="rec-skeleton-card" />
+                          </div>
+                        </div>
+                      )}
 
                       {msg.role === 'assistant' && msg.recs && msg.recs.length > 0 && (
                         <>
@@ -235,15 +313,13 @@ export default function App() {
                               <RecommendationCard
                                 key={`${i}-${j}`}
                                 rec={rec}
-                                onPreviewPlayed={handlePreviewPlayed}
+                                isPlaying={activePreviewKey === previewKeyFor(rec)}
+                                onTogglePlay={() => handleTogglePlay(rec)}
                                 onOutboundClick={handleOutboundClick}
                               />
                             ))}
                           </div>
 
-                          {/* Follow-up question renders below the cards, not
-                              inline with the opening reflection above — see
-                              chat.js's followUpQuestion field. */}
                           {msg.followUpQuestion && (
                             <p className="rec-followup">{msg.followUpQuestion}</p>
                           )}
