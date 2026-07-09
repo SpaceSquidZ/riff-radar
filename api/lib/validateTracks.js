@@ -1,33 +1,52 @@
 // api/lib/validateTracks.js
 //
 // The anti-hallucination guard from PRD Section 7.3 / Automation 3.
-// Call this from /api/chat AFTER Claude returns recommendations and BEFORE
-// sending them to the user.
+// Call from /api/chat AFTER Claude returns recommendations, BEFORE sending
+// them to the user.
 //
-// Validation is now MULTI-STORE. The original US-only search systematically
-// dropped real non-English tracks (Mandarin, Cantonese, K-pop, J-pop) that
-// simply aren't in the US iTunes catalog or lack a US preview — which made
-// entire non-English recommendation sets vanish. For any track containing
-// non-Latin characters, this also searches the TW/HK/JP/KR/CN stores, where
-// that catalog actually lives.
+// Validation is MULTI-STORE, and which stores get searched is decided two
+// ways, because neither alone is sufficient:
 //
-// Three outcomes per track:
-//   'found'            — real track, artist matches, AND a preview exists
-//   'found_no_preview' — real track, artist matches, but no preview clip
-//                        anywhere (still has artwork + an Apple Music page)
-//   'not_found'        — no artist match in ANY searched store (strong
-//                        hallucination signal now that we search worldwide)
-//   'unconfirmed'      — every iTunes request itself failed (network/5xx);
-//                        NOT a hallucination signal, don't penalize it
+//   1. Script detection — a track/artist written in non-Latin characters
+//      (你, 蛋堡, ヨルシカ) obviously needs regional stores.
+//
+//   2. A LANGUAGE HINT from the conversation — this catches the case script
+//      detection misses entirely: a song whose TITLE and ARTIST are Latin
+//      text but which is actually sung in another language. "Come Over" by
+//      "DEAN" is all-Latin characters but Korean; a romanized-name Mandarin
+//      artist with an English song title is all-Latin too. If the user
+//      described their moment in Korean/Chinese/Japanese/etc., that's a
+//      strong signal to search those regional stores regardless of how the
+//      track name happens to be spelled.
+//
+// Outcomes per track:
+//   'found'            — real, artist matches, has a preview
+//   'found_no_preview' — real, artist matches, no preview clip anywhere
+//   'not_found'        — no artist match in ANY searched store
+//   'unconfirmed'      — every iTunes request itself failed (network/5xx)
 
 const ITUNES_BASE = 'https://itunes.apple.com/search';
 
-// Searched IN ADDITION to US when a track/artist has non-Latin characters.
-const EXTRA_STORES_FOR_NON_LATIN = ['TW', 'HK', 'JP', 'KR', 'CN'];
+// Map a coarse language hint to the iTunes storefronts most likely to carry
+// that catalog. Keys are intentionally loose so callers can pass ISO 639-1,
+// ISO 639-3 (what `franc` emits), or a plain language name.
+const LANGUAGE_TO_STORES = {
+  // Chinese
+  zh: ['TW', 'HK', 'CN'], cmn: ['TW', 'HK', 'CN'], chinese: ['TW', 'HK', 'CN'], mandarin: ['TW', 'HK', 'CN'], cantonese: ['HK', 'TW'], yue: ['HK', 'TW'],
+  // Korean
+  ko: ['KR'], kor: ['KR'], korean: ['KR'],
+  // Japanese
+  ja: ['JP'], jpn: ['JP'], japanese: ['JP'],
+  // A few more common cases
+  th: ['TH'], tha: ['TH'], vi: ['VN'], vie: ['VN'], id: ['ID'], ind: ['ID'],
+  es: ['ES', 'MX'], spa: ['ES', 'MX'], pt: ['BR', 'PT'], por: ['BR', 'PT'],
+  fr: ['FR'], fra: ['FR'], de: ['DE'], deu: ['DE'], hi: ['IN'], hin: ['IN'],
+};
 
-// True if the string contains anything beyond basic Latin + Latin-1 +
-// Latin Extended-A (covers accented European text as "Latin", flags CJK,
-// Hangul, kana, etc. as non-Latin).
+// Fallback set when a track has non-Latin characters but we have no more
+// specific language hint.
+const GENERIC_NON_LATIN_STORES = ['TW', 'HK', 'JP', 'KR', 'CN'];
+
 function hasNonLatin(s) {
   return /[^\u0000-\u024f]/.test(s || '');
 }
@@ -49,10 +68,27 @@ function artistsMatch(a, b) {
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
-// Returns an array of results, or null if the request itself failed.
-// null (request failed) is deliberately distinct from [] (request
-// succeeded, no matches) so the caller can tell a network problem apart
-// from a genuine no-such-track.
+// Decides which storefronts to search for one track. US is always included.
+// Regional stores are added from the language hint and/or from non-Latin
+// characters in the track itself. Deduped, US first.
+function storesFor(rec, languageHint) {
+  const set = new Set(['US']);
+
+  const hintKey = (languageHint || '').toLowerCase().trim();
+  if (hintKey && LANGUAGE_TO_STORES[hintKey]) {
+    for (const s of LANGUAGE_TO_STORES[hintKey]) set.add(s);
+  }
+
+  if (hasNonLatin(rec.track) || hasNonLatin(rec.artist)) {
+    // If we had a specific hint we've already added its stores; still add
+    // the generic set so e.g. a stray CJK title in an otherwise-English
+    // session is covered.
+    for (const s of GENERIC_NON_LATIN_STORES) set.add(s);
+  }
+
+  return [...set];
+}
+
 async function searchStore(term, country) {
   const url = `${ITUNES_BASE}?term=${encodeURIComponent(term)}&entity=song&limit=5&country=${country}`;
   try {
@@ -66,10 +102,9 @@ async function searchStore(term, country) {
   }
 }
 
-export async function validateOneTrack(rec) {
+export async function validateOneTrack(rec, languageHint) {
   const term = `${rec.track} ${rec.artist}`;
-  const nonLatin = hasNonLatin(rec.track) || hasNonLatin(rec.artist);
-  const stores = nonLatin ? ['US', ...EXTRA_STORES_FOR_NON_LATIN] : ['US'];
+  const stores = storesFor(rec, languageHint);
 
   const storeResults = await Promise.all(stores.map((c) => searchStore(term, c)));
 
@@ -77,7 +112,7 @@ export async function validateOneTrack(rec) {
   const artistMatches = [];
 
   for (const results of storeResults) {
-    if (results === null) continue; // this store's request failed
+    if (results === null) continue;
     anyRequestSucceeded = true;
     for (const r of results) {
       if (artistsMatch(r.artistName, rec.artist)) artistMatches.push(r);
@@ -92,8 +127,6 @@ export async function validateOneTrack(rec) {
     return { status: 'not_found', enriched: null };
   }
 
-  // Prefer a match that actually has a playable preview; fall back to any
-  // confirmed match (real track, no preview clip available).
   const withPreview = artistMatches.find((m) => m.previewUrl);
   const best = withPreview || artistMatches[0];
 
@@ -108,13 +141,17 @@ export async function validateOneTrack(rec) {
   };
 }
 
-export async function validateAndEnrichRecs(recs) {
+// languageHint is optional — a coarse language code or name derived from the
+// user's own words (see chat.js). When absent, validation still works via
+// script detection; the hint only widens the store net for the
+// English-title / non-English-audio case.
+export async function validateAndEnrichRecs(recs, languageHint) {
   const results = await Promise.all(
     recs.map(async (rec) => {
-      const { status, enriched } = await validateOneTrack(rec);
+      const { status, enriched } = await validateOneTrack(rec, languageHint);
       return {
         ...rec,
-        itunesValidation: status, // 'found' | 'found_no_preview' | 'not_found' | 'unconfirmed'
+        itunesValidation: status,
         previewUrl: enriched?.previewUrl ?? null,
         artworkUrl: enriched?.artworkUrl ?? null,
         trackViewUrl: enriched?.trackViewUrl ?? null,

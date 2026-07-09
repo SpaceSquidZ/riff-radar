@@ -139,6 +139,28 @@ function buildSystemBlocks(loreAddendum, previousRecommendations) {
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 529]);
 
+// Coarse language sniff from the user's own words, used only to widen which
+// iTunes storefronts we search during validation. This is deliberately
+// simple (script-range heuristics, not a full language model) because it
+// only needs to answer "should we also look in the Korean / Chinese /
+// Japanese store?" — a wrong guess just means an extra store search or a
+// missed one, never a broken reply. If the client ever passes an explicit
+// franc-derived code, that takes precedence over this.
+function detectLanguageHint(messages) {
+  const userText = messages
+    .filter((m) => m.role === 'user')
+    .map((m) => m.content)
+    .join(' ');
+
+  // Script ranges are the strongest signal when present.
+  if (/[\uac00-\ud7af]/.test(userText)) return 'ko'; // Hangul
+  if (/[\u3040-\u30ff]/.test(userText)) return 'ja'; // kana (hiragana/katakana)
+  if (/[\u4e00-\u9fff]/.test(userText)) return 'zh'; // CJK ideographs
+  if (/[\u0e00-\u0e7f]/.test(userText)) return 'th'; // Thai
+
+  return null; // no strong signal — validation falls back to script + US
+}
+
 async function callAnthropicStream({ messages, loreAddendum, previousRecommendations }) {
   return fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -149,7 +171,7 @@ async function callAnthropicStream({ messages, loreAddendum, previousRecommendat
     },
     body: JSON.stringify({
       model: 'claude-sonnet-5',
-      max_tokens: 2500,
+      max_tokens: 3072,
       stream: true,
       system: buildSystemBlocks(loreAddendum, previousRecommendations),
       messages,
@@ -245,7 +267,12 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
   }
 
   if (stopReason === 'max_tokens') {
-    console.warn('Groove reply was truncated by max_tokens. Consider raising the limit further.');
+    // Carry enough context to actually identify WHICH reply hit the ceiling
+    // when scanning Vercel logs — length and a short prefix of the reply.
+    console.warn(
+      `Groove reply truncated by max_tokens (length ${fullText.length}). ` +
+        `First 120 chars: ${JSON.stringify(fullText.slice(0, 120))}`
+    );
   }
 
   return fullText;
@@ -256,7 +283,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { messages: rawMessages, sessionCount = 0, sessionId, previousRecommendations = [] } = req.body;
+  const { messages: rawMessages, sessionCount = 0, sessionId, previousRecommendations = [], languageHint: clientLanguageHint } = req.body;
 
   if (!rawMessages || !Array.isArray(rawMessages)) {
     return res.status(400).json({ error: 'messages array is required' });
@@ -293,7 +320,11 @@ export default async function handler(req, res) {
     let enrichedRecs = [];
 
     if (recs.length > 0) {
-      const validated = await validateAndEnrichRecs(recs);
+      // Prefer an explicit hint from the client (e.g. a franc-derived code
+      // off the moment form) if it sent one; otherwise sniff it from the
+      // conversation text server-side.
+      const languageHint = clientLanguageHint || detectLanguageHint(messages);
+      const validated = await validateAndEnrichRecs(recs, languageHint);
 
       // Keep anything that isn't a confirmed hallucination. 'found' and
       // 'found_no_preview' are real tracks (full / reduced cards);
