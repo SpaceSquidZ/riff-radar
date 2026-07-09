@@ -1,18 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 
-// One recommendation card. Playback is now controlled by the PARENT
-// (App.jsx owns one shared <audio> element for the whole page) instead of
-// each card managing its own <audio> — that's what previously let two
-// cards' previews play simultaneously, since pressing play on card 2 had
-// no way to know card 1's audio existed. Card just reflects isPlaying and
-// asks the parent to toggle playback.
+// One recommendation card. Renders gracefully across three richness tiers,
+// gating each element on whether its data is actually present rather than
+// on an exact validation-status string:
+//   - full:    artwork + preview player + Apple Music link + Spotify link
+//   - reduced: artwork + Apple Music link + Spotify link (no preview clip)
+//   - minimal: title/artist/genre/explanation + Spotify search link only
+//              (a real-but-unfound or non-English track we couldn't verify
+//              in any iTunes store — the Spotify search link works for any
+//              language and never presents fabricated data as real)
 //
-// Expects:
-//   rec: { track, artist, matchAxis, genre, explanation, releaseYear,
-//          itunesValidation, previewUrl, artworkUrl, trackViewUrl }
-//   isPlaying: boolean — whether THIS card's preview is the one currently playing
-//   onTogglePlay: () => void — ask the parent to play/pause this card's preview
-//   onOutboundClick: ({track, artist, service, url}) => void
+// Playback is controlled by the parent (App.jsx owns one shared <audio>).
 
 function spotifySearchUrl(track, artist) {
   const q = encodeURIComponent(`${track} ${artist}`);
@@ -24,8 +22,11 @@ export default function RecommendationCard({ rec, isPlaying, onTogglePlay, onOut
   const [isOverflowing, setIsOverflowing] = useState(false);
   const explanationRef = useRef(null);
 
-  const hasPreview = rec.itunesValidation === 'found' && !!rec.previewUrl;
-  const hasAppleMusicLink = rec.itunesValidation === 'found' && !!rec.trackViewUrl;
+  // Gate on data presence, not on a status string — a track found without
+  // a preview should still show its artwork and Apple Music link.
+  const hasPreview = !!rec.previewUrl;
+  const hasArtwork = !!rec.artworkUrl;
+  const hasAppleMusicLink = !!rec.trackViewUrl;
 
   useEffect(() => {
     if (explanationRef.current) {
@@ -45,7 +46,7 @@ export default function RecommendationCard({ rec, isPlaying, onTogglePlay, onOut
     <div className="rec-card">
       {rec.matchAxis && <span className="rec-pill">{rec.matchAxis}</span>}
 
-      {hasPreview && rec.artworkUrl && (
+      {hasArtwork && (
         <img src={rec.artworkUrl} alt={`${rec.track} artwork`} className="rec-artwork" />
       )}
 

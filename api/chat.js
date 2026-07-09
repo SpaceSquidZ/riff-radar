@@ -295,7 +295,10 @@ export default async function handler(req, res) {
     if (recs.length > 0) {
       const validated = await validateAndEnrichRecs(recs);
 
-      enrichedRecs = validated.filter((r) => r.itunesValidation === 'found');
+      // Keep anything that isn't a confirmed hallucination. 'found' and
+      // 'found_no_preview' are real tracks (full / reduced cards);
+      // 'unconfirmed' means iTunes itself failed, which we don't punish.
+      const keepable = validated.filter((r) => r.itunesValidation !== 'not_found');
       const dropped = validated.filter((r) => r.itunesValidation === 'not_found');
 
       if (sessionId && dropped.length > 0) {
@@ -305,6 +308,15 @@ export default async function handler(req, res) {
           total_recs: recs.length,
         });
       }
+
+      // Last-resort fallback: if EVERY rec failed validation (e.g. an
+      // all-non-English set we couldn't confirm in any store), don't return
+      // an empty response — show all of them as minimal cards. A minimal
+      // card presents only Groove's own text plus a Spotify SEARCH link,
+      // which works in any language and can't display a fabricated preview,
+      // artwork, or Apple Music page as real. Better to give the user
+      // something searchable than a reply with a lead-in and no tracks.
+      enrichedRecs = keepable.length > 0 ? keepable : validated;
     }
 
     if (sessionId) {
