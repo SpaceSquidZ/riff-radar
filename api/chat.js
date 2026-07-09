@@ -199,11 +199,18 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { messages, sessionCount = 0, sessionId } = req.body;
+  const { messages: rawMessages, sessionCount = 0, sessionId } = req.body;
 
-  if (!messages || !Array.isArray(messages)) {
+  if (!rawMessages || !Array.isArray(rawMessages)) {
     return res.status(400).json({ error: 'messages array is required' });
   }
+
+  // Defensive sanitization: Anthropic's API rejects any message object with
+  // fields beyond {role, content} (400 "Extra inputs are not permitted").
+  // The client already strips its UI-only fields (recs, followUpQuestion,
+  // buildingRecs) before sending, but this guards against that ever
+  // regressing or a different client sending enriched message objects.
+  const messages = rawMessages.map(({ role, content }) => ({ role, content }));
 
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson',

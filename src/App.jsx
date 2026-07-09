@@ -119,10 +119,15 @@ export default function App() {
 
     try {
       const sessionId = getSessionId();
+      // newMessages may include assistant messages carrying UI-only fields
+      // (recs, followUpQuestion, buildingRecs) attached after streaming.
+      // Anthropic's API only accepts {role, content} per message and
+      // rejects anything else with a 400 — strip down before sending.
+      const apiMessages = newMessages.map(({ role, content }) => ({ role, content }));
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: newMessages, sessionCount: 0, sessionId }),
+        body: JSON.stringify({ messages: apiMessages, sessionCount: 0, sessionId }),
       });
 
       if (!response.ok || !response.body) {
