@@ -227,21 +227,15 @@ export default function App() {
     );
   }
 
+  const videoColStyle = phase === 'chat' && !videoLoaded ? { display: 'none' } : undefined;
+
   return (
     <>
       <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '1.5rem' }}>
         <h1>Riff Radar</h1>
 
-        <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
-          <div
-            style={{
-              flex: '0 0 420px',
-              display: phase === 'chat' && !videoLoaded ? 'none' : 'block',
-              position: 'sticky',
-              top: '1.5rem',
-              alignSelf: 'flex-start',
-            }}
-          >
+        <div className="app-layout">
+          <div className="app-layout-video-col" style={videoColStyle}>
             <YouTubeMomentPicker
               onTimestampCaptured={setYoutubeTimestamp}
               onTitleGuessed={setTitleGuess}
@@ -254,7 +248,7 @@ export default function App() {
             )}
           </div>
 
-          <div style={{ flex: '1 1 0', minWidth: 0 }}>
+          <div className="app-layout-content-col">
             {phase === 'form' && (
               <>
                 {!videoLoaded && (
@@ -334,7 +328,7 @@ export default function App() {
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                     placeholder="Type a message..."
-                    style={{ flex: 1 }}
+                    style={{ flex: 1, fontSize: '16px' }}
                   />
                   <button onClick={handleSend}>Send</button>
                 </div>

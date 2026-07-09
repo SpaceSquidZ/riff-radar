@@ -1,7 +1,64 @@
 /* riff-radar.css
-   Styles for the rec-card redesign, left-aligned layout, and moment-form.
-   Imported in App.jsx.
+   Styles for the rec-card redesign, left-aligned layout, moment-form, and
+   the responsive two-column app layout. Imported in App.jsx.
 */
+
+/* --- Top-level two-column layout ---
+   Previously this was inline styles in App.jsx, which can't use media
+   queries — on a phone-width screen, the layout still tried to render the
+   video column (hardcoded 420px wide) and the content column side by
+   side, wider than most phone screens, forcing horizontal scrolling just
+   to reach the form. Moved to real classes so a breakpoint can collapse
+   this into one stacked column below 800px. */
+
+.app-layout {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.app-layout-video-col {
+  flex: 0 0 420px;
+  position: sticky;
+  top: 1.5rem;
+  align-self: flex-start;
+}
+
+.app-layout-content-col {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+@media (max-width: 800px) {
+  .app-layout {
+    flex-direction: column;
+  }
+
+  .app-layout-video-col {
+    flex: 1 1 auto;
+    width: 100%;
+    /* Sticky only makes sense in a side-by-side layout where the video
+       stays visible while an independent column scrolls next to it.
+       Stacked vertically, "sticky" would just awkwardly pin the video
+       mid-scroll — disable it here. */
+    position: static;
+    top: auto;
+  }
+
+  .app-layout-content-col {
+    width: 100%;
+  }
+
+  .moment-form-card {
+    max-width: 100%;
+    padding: 16px 18px;
+  }
+
+  .rec-grid,
+  .rec-skeleton-grid {
+    max-width: 100%;
+  }
+}
 
 /* --- Global left-alignment --- */
 
@@ -25,10 +82,7 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   color: #ffffff;
 }
 
-/* --- Card container, shared by MomentForm.jsx and YouTubeMomentPicker.jsx ---
-   Every piece of text and every input inside gets an EXPLICIT color rather
-   than relying on inheritance, since this card sits on a dark page
-   background and needs its own light-mode colors regardless. */
+/* --- Card container, shared by MomentForm.jsx and YouTubeMomentPicker.jsx --- */
 
 .moment-form-card {
   background: #ffffff;
@@ -67,9 +121,13 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   color: #444;
 }
 
+/* Font size 16px, not 14px — iOS Safari auto-zooms the whole page on
+   focus for any input smaller than 16px, which feels janky and is a very
+   common overlooked mobile bug. Applies to every text input/textarea in
+   the app, not just this one. */
 .moment-form-field input,
 .moment-form-field textarea {
-  font-size: 14px;
+  font-size: 16px;
   padding: 8px 10px;
   border: 1px solid #ccc;
   border-radius: 8px;
@@ -123,9 +181,6 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   background: #333;
 }
 
-/* One-line intro shown above the moment-form card, replacing what used to
-   be a second, redundant heading ("Type it yourself" stacked directly
-   above "Describe a moment"). */
 .section-intro-line {
   font-size: 0.85em;
   opacity: 0.7;
@@ -133,12 +188,11 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   color: #e8e8e8;
 }
 
-/* --- Shared card input/button styles, used by both MomentForm.jsx and
-   YouTubeMomentPicker.jsx now that both sit inside .moment-form-card --- */
+/* --- Shared card input/button styles --- */
 
 .card-text-input {
   width: 100%;
-  font-size: 14px;
+  font-size: 16px; /* same iOS-zoom fix as above */
   padding: 8px 10px;
   border: 1px solid #ccc;
   border-radius: 8px;
@@ -192,6 +246,7 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+  flex-wrap: wrap;
 }
 
 /* --- Recommendation grid --- */
