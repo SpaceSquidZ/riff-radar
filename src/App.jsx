@@ -250,19 +250,12 @@ export default function App() {
 
           <div className="app-layout-content-col">
             {phase === 'form' && (
-              <>
-                {!videoLoaded && (
-                  <p className="section-intro-line">
-                    Already know the song? Fill it in below.
-                  </p>
-                )}
-                <MomentForm
-                  onSubmit={handleMomentSubmit}
-                  youtubeTimestamp={youtubeTimestamp}
-                  videoLoaded={videoLoaded}
-                  titleGuess={titleGuess}
-                />
-              </>
+              <MomentForm
+                onSubmit={handleMomentSubmit}
+                youtubeTimestamp={youtubeTimestamp}
+                videoLoaded={videoLoaded}
+                titleGuess={titleGuess}
+              />
             )}
 
             {phase === 'chat' && (

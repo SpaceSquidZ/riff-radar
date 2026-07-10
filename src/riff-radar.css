@@ -3,6 +3,22 @@
    the responsive two-column app layout. Imported in App.jsx.
 */
 
+/* --- Force dark theme permanently ---
+   Vite's default project scaffolding ships with a
+   `@media (prefers-color-scheme: light)` block that flips the page to a
+   white background with dark text whenever the user's OS is in light
+   mode — that's very likely what's living in App.css/index.css and
+   causing text to wash out against a white page. Riff Radar's whole
+   identity is a late-night companion; locking to dark permanently avoids
+   an entire category of text-blends-into-background bugs. !important is
+   used deliberately here to guarantee this wins regardless of which file
+   loads first or how that other media query is written. */
+html, body, #root {
+  background-color: #16171d !important;
+  color: #e8e8e8 !important;
+  color-scheme: dark !important;
+}
+
 /* --- Top-level two-column layout ---
    Previously this was inline styles in App.jsx, which can't use media
    queries — on a phone-width screen, the layout still tried to render the
