@@ -4,20 +4,21 @@
 // Call from /api/chat AFTER Claude returns recommendations, BEFORE sending
 // them to the user.
 //
-// Validation is MULTI-STORE, and which stores get searched is decided two
-// ways, because neither alone is sufficient:
+// Validation is MULTI-STORE, and which stores get searched is decided by
+// three signals, because no single one is sufficient:
 //
 //   1. Script detection — a track/artist written in non-Latin characters
 //      (你, 蛋堡, ヨルシカ) obviously needs regional stores.
 //
-//   2. A LANGUAGE HINT from the conversation — this catches the case script
-//      detection misses entirely: a song whose TITLE and ARTIST are Latin
-//      text but which is actually sung in another language. "Come Over" by
-//      "DEAN" is all-Latin characters but Korean; a romanized-name Mandarin
-//      artist with an English song title is all-Latin too. If the user
-//      described their moment in Korean/Chinese/Japanese/etc., that's a
-//      strong signal to search those regional stores regardless of how the
-//      track name happens to be spelled.
+//   2. A LANGUAGE HINT from the conversation — catches a song whose TITLE
+//      and ARTIST are Latin text but which is sung in another language, when
+//      the user described their moment in that language.
+//
+//   3. A per-track REGION HINT reported by Groove (rec.region) — catches the
+//      case the other two miss entirely: a Latin-script track, in an
+//      English-language session, that just isn't in the US catalog (e.g.
+//      Jorge Ben / Brazil, Fela Kuti / Nigeria). Groove knows the origin
+//      when it recommends the track; this routes validation to that store.
 //
 // Outcomes per track:
 //   'found'            — real, artist matches, has a preview
@@ -43,6 +44,40 @@ const LANGUAGE_TO_STORES = {
   fr: ['FR'], fra: ['FR'], de: ['DE'], deu: ['DE'], hi: ['IN'], hin: ['IN'],
 };
 
+// Map a per-track REGION hint (reported by Groove in the metadata, e.g.
+// "Brazil", "France", "Nigeria") to storefronts. This is the fix for the
+// case BOTH script detection and the conversation language hint miss: a
+// Latin-script track, in an English-language session, that simply isn't in
+// the US catalog. Groove knows Jorge Ben is Brazilian and Fela Kuti is
+// Nigerian when it recommends them; letting it say so routes validation to
+// the right store. Keys are lowercased country/region names and a few
+// common aliases.
+const REGION_TO_STORES = {
+  brazil: ['BR'], brazilian: ['BR'],
+  portugal: ['PT'], portuguese: ['PT'],
+  france: ['FR'], french: ['FR'],
+  germany: ['DE'], german: ['DE'],
+  spain: ['ES'], spanish: ['ES'],
+  mexico: ['MX'], mexican: ['MX'],
+  italy: ['IT'], italian: ['IT'],
+  nigeria: ['NG'], nigerian: ['NG'], 'west africa': ['NG'],
+  'south africa': ['ZA'],
+  jamaica: ['JM'], jamaican: ['JM'],
+  japan: ['JP'], japanese: ['JP'],
+  korea: ['KR'], 'south korea': ['KR'], korean: ['KR'],
+  china: ['CN'], chinese: ['CN'],
+  taiwan: ['TW'], taiwanese: ['TW'],
+  'hong kong': ['HK'],
+  thailand: ['TH'], thai: ['TH'],
+  vietnam: ['VN'], vietnamese: ['VN'],
+  indonesia: ['ID'], indonesian: ['ID'],
+  india: ['IN'], indian: ['IN'],
+  sweden: ['SE'], norway: ['NO'], iceland: ['IS'],
+  netherlands: ['NL'], dutch: ['NL'],
+  uk: ['GB'], 'united kingdom': ['GB'], britain: ['GB'], british: ['GB'], england: ['GB'],
+  canada: ['CA'], australia: ['AU'],
+};
+
 // Fallback set when a track has non-Latin characters but we have no more
 // specific language hint.
 const GENERIC_NON_LATIN_STORES = ['TW', 'HK', 'JP', 'KR', 'CN'];
@@ -61,18 +96,57 @@ function normalizeArtist(name) {
     .trim();
 }
 
-function artistsMatch(a, b) {
+// Splits a credited-artist string into its individual artists so a collab
+// can be matched against EITHER name, not just the first. iTunes sometimes
+// files "The Roots feat. Erykah Badu" under "Erykah Badu" as the primary
+// artist; matching only the leading name ("The Roots") then wrongly fails.
+// Returns e.g. ["the roots", "erykah badu"] for "The Roots feat. Erykah Badu".
+function artistCandidates(name) {
+  const raw = name || '';
+  const parts = raw
+    .split(/\bfeat\.?\b|\bft\.?\b|\bfeaturing\b|,|&|\bx\b|\bwith\b|\/|\band\b/i)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const cands = parts.length > 0 ? parts : [raw];
+  // Also include the fully-normalized whole string as a candidate.
+  return [...new Set([...cands.map((c) => normalizeArtist(c)), normalizeArtist(raw)])].filter(Boolean);
+}
+
+function oneArtistMatches(a, b) {
   const na = normalizeArtist(a);
   const nb = normalizeArtist(b);
   if (!na || !nb) return false;
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
+// True if ANY named artist in the recommendation matches ANY named artist in
+// the iTunes result — the dual-direction check that fixes collab crediting.
+function artistsMatch(itunesArtist, recArtist) {
+  const recCands = artistCandidates(recArtist);
+  const itunesCands = artistCandidates(itunesArtist);
+  for (const rc of recCands) {
+    for (const ic of itunesCands) {
+      if (oneArtistMatches(ic, rc)) return true;
+    }
+  }
+  return false;
+}
+
 // Decides which storefronts to search for one track. US is always included.
-// Regional stores are added from the language hint and/or from non-Latin
-// characters in the track itself. Deduped, US first.
+// Regional stores are added from three signals, any of which can apply:
+//   - the track's REGION hint from Groove (rec.region) — the strongest, and
+//     the only one that catches Latin-script non-US catalog in an English
+//     session (Brazilian, French, Nigerian, etc.)
+//   - the conversation LANGUAGE hint
+//   - non-Latin characters in the track/artist itself
+// Deduped, US first.
 function storesFor(rec, languageHint) {
   const set = new Set(['US']);
+
+  const regionKey = (rec.region || '').toLowerCase().trim();
+  if (regionKey && REGION_TO_STORES[regionKey]) {
+    for (const s of REGION_TO_STORES[regionKey]) set.add(s);
+  }
 
   const hintKey = (languageHint || '').toLowerCase().trim();
   if (hintKey && LANGUAGE_TO_STORES[hintKey]) {
@@ -80,9 +154,6 @@ function storesFor(rec, languageHint) {
   }
 
   if (hasNonLatin(rec.track) || hasNonLatin(rec.artist)) {
-    // If we had a specific hint we've already added its stores; still add
-    // the generic set so e.g. a stray CJK title in an otherwise-English
-    // session is covered.
     for (const s of GENERIC_NON_LATIN_STORES) set.add(s);
   }
 

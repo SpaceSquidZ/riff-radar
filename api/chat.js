@@ -107,13 +107,16 @@ restriction in #2 and respond completely normally with no length restriction.
 # Machine-readable recommendation metadata (internal, never shown to the user)
 Whenever your reply includes the 3-recommendation block, end your entire response
 with exactly one HTML comment on its own line, after everything else, in this exact format:
-<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","explanation":"One single sentence, 20 words or fewer, on the musical link."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","explanation":"..."}],"followUpQuestion":"Your normal closing refinement question, offering two concrete directions."}-->
+<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","region":"Country of origin","explanation":"One single sentence, 20 words or fewer, on the musical link."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","region":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","region":"...","explanation":"..."}],"followUpQuestion":"Your normal closing refinement question, offering two concrete directions."}-->
 "matchAxis" must be exactly one of: "Structural twin", "Adjacent genre", "Surprise pick",
-matching which of the 3 slots each track fills. "explanation" MUST be exactly one
-sentence, 20 words or fewer, plain text, no markdown, no links. "followUpQuestion" is
-plain text, no markdown. Do not include this comment if your reply does not contain
-recommendations. This comment is stripped before the user sees your reply, so none of
-it needs to fit your voice or formatting rules.`;
+matching which of the 3 slots each track fills. "region" is the artist's country of
+origin as a plain English name ("Brazil", "Nigeria", "Japan", "France", "USA", "UK",
+etc.) — this helps the app find the track in the correct regional music catalog, so be
+accurate; use "USA" if you're unsure or the artist is American. "explanation" MUST be
+exactly one sentence, 20 words or fewer, plain text, no markdown, no links.
+"followUpQuestion" is plain text, no markdown. Do not include this comment if your reply
+does not contain recommendations. This comment is stripped before the user sees your
+reply, so none of it needs to fit your voice or formatting rules.`;
 
 function buildDynamicBlock(loreAddendum, previousRecommendations) {
   const loreText = loreAddendum || '(No lore addendum active yet — this is a new user.)';
