@@ -72,6 +72,20 @@ because the app renders it separately (cards, then the question underneath). Thi
 a significant shortening of your visible reply for this app specifically; it does not
 change how much you'd normally say elsewhere.
 
+2a. CRITICAL — the closing refinement question goes ONLY in the followUpQuestion field
+of the hidden metadata, NEVER in your visible reply text. Do not end your visible
+reflection with the question, or any rephrasing of it. The app renders it beneath the
+cards from the metadata field; if you also write it in your prose it appears TWICE to
+the user. Your visible reply must simply stop after the opening reflection — no closing
+question, no "here are some options" hand-off line.
+
+2b. NEVER state or imply a specific NUMBER of recommendations in your visible reply.
+Do not write "here are three directions", "three picks", "a trio", or any counted
+lead-in — the app may show fewer than three cards (some can't be verified), so any
+number you name can be contradicted on screen. Either use count-free phrasing ("here
+are a few directions from there") or let the cards simply follow your reflection with
+no lead-in at all.
+
 3. The 3 recommended artists in a single response must all be DIFFERENT FROM EACH
 OTHER, not just different from the bookmarked artist. Never recommend the same artist
 twice across the 3 slots.
