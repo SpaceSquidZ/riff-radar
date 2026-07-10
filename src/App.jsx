@@ -166,10 +166,18 @@ export default function App() {
             updateLastMessage((msg) => ({ ...msg, content: msg.content + event.text }));
           } else if (event.type === 'recs_starting') {
             updateLastMessage((msg) => ({ ...msg, buildingRecs: true }));
-          } else if (event.type === 'done') {
+          } else if (event.type === 'rec_ready') {
+            // Progressive reveal: each card arrives on its own as its iTunes
+            // lookup resolves. Append it so the grid grows 0 -> 1 -> 2 -> 3.
             updateLastMessage((msg) => ({
               ...msg,
-              recs: event.recs || [],
+              recs: [...(msg.recs || []), event.rec],
+            }));
+          } else if (event.type === 'done') {
+            // recs already arrived via rec_ready; done just carries the
+            // closing question and clears the "preparing" state.
+            updateLastMessage((msg) => ({
+              ...msg,
               followUpQuestion: event.followUpQuestion || '',
               buildingRecs: false,
             }));
@@ -261,6 +269,9 @@ export default function App() {
             {phase === 'chat' && (
               <div>
                 {messages.map((msg, i) => {
+                  // Don't render an empty assistant bubble before the first
+                  // token arrives — otherwise a bare "Groove:" flashes with
+                  // no content while the request is still in flight.
                   const isStreamingPlaceholder =
                     msg.role === 'assistant' &&
                     i === messages.length - 1 &&
@@ -269,7 +280,12 @@ export default function App() {
 
                   if (isStreamingPlaceholder) return null;
 
-                  const showSkeleton =
+                  // Show the "preparing" line only while recs are coming AND
+                  // none have arrived yet. Once the first rec_ready lands,
+                  // the growing card grid replaces it. A plain text line
+                  // (vs. 3 skeleton cards) can never look like it "dwindled"
+                  // to 2, because it never promised a count.
+                  const showPreparing =
                     msg.role === 'assistant' &&
                     msg.buildingRecs &&
                     (!msg.recs || msg.recs.length === 0);
@@ -279,15 +295,8 @@ export default function App() {
                       <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong>
                       <MessageContent content={msg.content} />
 
-                      {showSkeleton && (
-                        <div className="rec-skeleton-wrap">
-                          <p className="rec-skeleton-label">Lining up your tracks...</p>
-                          <div className="rec-skeleton-grid">
-                            <div className="rec-skeleton-card" />
-                            <div className="rec-skeleton-card" />
-                            <div className="rec-skeleton-card" />
-                          </div>
-                        </div>
+                      {showPreparing && (
+                        <p className="rec-preparing-line">Groove is pulling a few records...</p>
                       )}
 
                       {msg.role === 'assistant' && msg.recs && msg.recs.length > 0 && (

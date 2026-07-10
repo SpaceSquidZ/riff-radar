@@ -6,19 +6,22 @@
 // logs events.
 //
 // Response protocol (newline-delimited JSON, one object per line):
-//   {"type":"delta","text":"..."}                          — a chunk of Groove's visible reply
-//   {"type":"recs_starting"}                                — server has begun writing the
-//                                                              hidden rec metadata; recs ARE
-//                                                              coming for this reply
-//   {"type":"done","recs":[...],"followUpQuestion":"..."}  — stream finished
-//   {"type":"error","message":"..."}                        — something went wrong mid-stream
+//   {"type":"delta","text":"..."}              — a chunk of Groove's visible reply
+//   {"type":"recs_starting"}                    — server began the hidden rec
+//                                                 metadata; recs ARE coming (the
+//                                                 "Groove is preparing" cue)
+//   {"type":"rec_ready","rec":{...}}            — one validated card, emitted the
+//                                                 moment its own iTunes lookup
+//                                                 resolves (progressive reveal)
+//   {"type":"done","followUpQuestion":"..."}   — stream finished
+//   {"type":"error","message":"..."}            — something went wrong mid-stream
 //
 // Logs three event types to Supabase:
 //   message_sent, rec_generated, itunes_validation_failed
 
 import { GROOVE_BASE_PROMPT, getLoreAddendum } from '../src/groovePrompt.js';
 import { logEvent } from '../src/supabaseClient.js';
-import { validateAndEnrichRecs } from './lib/validateTracks.js';
+import { validateOneTrack } from './lib/validateTracks.js';
 
 // Vercel kills a serverless function outright once it exceeds its max
 // execution duration — no error event, no graceful close, the connection
@@ -320,17 +323,41 @@ export default async function handler(req, res) {
     let enrichedRecs = [];
 
     if (recs.length > 0) {
-      // Prefer an explicit hint from the client (e.g. a franc-derived code
-      // off the moment form) if it sent one; otherwise sniff it from the
-      // conversation text server-side.
       const languageHint = clientLanguageHint || detectLanguageHint(messages);
-      const validated = await validateAndEnrichRecs(recs, languageHint);
 
-      // Keep anything that isn't a confirmed hallucination. 'found' and
-      // 'found_no_preview' are real tracks (full / reduced cards);
-      // 'unconfirmed' means iTunes itself failed, which we don't punish.
-      const keepable = validated.filter((r) => r.itunesValidation !== 'not_found');
-      const dropped = validated.filter((r) => r.itunesValidation === 'not_found');
+      // Progressive validation (Option 3): instead of validating all three
+      // tracks, waiting for the slowest, then sending them together, each
+      // track is validated in parallel and its card is emitted the moment
+      // ITS OWN iTunes lookup returns. The frontend appends cards as they
+      // arrive, so the grid grows 0 -> 1 -> 2 -> 3 rather than appearing all
+      // at once after a dead pause. Growing never looks like the "dwindling"
+      // a fixed 3-skeleton grid did, because cards are only ever added.
+      const kept = [];
+      const dropped = [];
+
+      await Promise.all(
+        recs.map(async (rec) => {
+          const { status, enriched } = await validateOneTrack(rec, languageHint);
+          const enrichedRec = {
+            ...rec,
+            itunesValidation: status,
+            previewUrl: enriched?.previewUrl ?? null,
+            artworkUrl: enriched?.artworkUrl ?? null,
+            trackViewUrl: enriched?.trackViewUrl ?? null,
+            releaseYear: enriched?.releaseYear ?? null,
+          };
+
+          if (status !== 'not_found') {
+            // Real track (or unconfirmed network failure) — show it now.
+            kept.push(enrichedRec);
+            res.write(JSON.stringify({ type: 'rec_ready', rec: enrichedRec }) + '\n');
+          } else {
+            // Hold confirmed hallucinations; whether they show at all depends
+            // on whether ANYTHING else survived (see fallback below).
+            dropped.push(enrichedRec);
+          }
+        })
+      );
 
       if (sessionId && dropped.length > 0) {
         logEvent(sessionId, 'itunes_validation_failed', {
@@ -340,14 +367,19 @@ export default async function handler(req, res) {
         });
       }
 
-      // Last-resort fallback: if EVERY rec failed validation (e.g. an
-      // all-non-English set we couldn't confirm in any store), don't return
-      // an empty response — show all of them as minimal cards. A minimal
-      // card presents only Groove's own text plus a Spotify SEARCH link,
-      // which works in any language and can't display a fabricated preview,
-      // artwork, or Apple Music page as real. Better to give the user
-      // something searchable than a reply with a lead-in and no tracks.
-      enrichedRecs = keepable.length > 0 ? keepable : validated;
+      // Last-resort fallback: if EVERY track failed validation, don't leave
+      // the user with a lead-in and no tracks — emit the dropped ones now as
+      // minimal cards (Groove's text + a Spotify search link, which works in
+      // any language and can't present fabricated preview/artwork/Apple data
+      // as real). Only reached when nothing else survived.
+      if (kept.length === 0 && dropped.length > 0) {
+        for (const rec of dropped) {
+          res.write(JSON.stringify({ type: 'rec_ready', rec }) + '\n');
+        }
+        enrichedRecs = dropped;
+      } else {
+        enrichedRecs = kept;
+      }
     }
 
     if (sessionId) {
@@ -364,7 +396,7 @@ export default async function handler(req, res) {
       }
     }
 
-    res.write(JSON.stringify({ type: 'done', recs: enrichedRecs, followUpQuestion }) + '\n');
+    res.write(JSON.stringify({ type: 'done', followUpQuestion }) + '\n');
     res.end();
   } catch (err) {
     console.error('Error in /api/chat:', err);

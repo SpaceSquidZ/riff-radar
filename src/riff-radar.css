@@ -265,6 +265,17 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   flex-wrap: wrap;
 }
 
+/* Single "Groove is preparing" line shown between recs_starting and the
+   first card arriving. Replaces the old 3-skeleton grid, which always
+   promised three cards and so looked like it "dwindled" when only two
+   survived validation. A plain line makes no count promise. */
+.rec-preparing-line {
+  margin-top: 12px;
+  font-size: 14px;
+  color: #9a9aa2;
+  font-style: italic;
+}
+
 /* --- Recommendation grid --- */
 
 .rec-grid {
