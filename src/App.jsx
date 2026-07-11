@@ -240,7 +240,7 @@ export default function App() {
   return (
     <>
       <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '1.5rem' }}>
-        <h1>Riff Radar</h1>
+        <h1 className="app-logo">Riff Radar</h1>
 
         <div className="app-layout">
           <div className="app-layout-video-col" style={videoColStyle}>

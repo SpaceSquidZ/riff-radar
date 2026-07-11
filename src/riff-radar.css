@@ -19,6 +19,13 @@ html, body, #root {
   color-scheme: dark !important;
 }
 
+/* The Riff Radar wordmark. Explicit light color so it reads against the
+   locked dark background — without it, the h1 inherits a near-black
+   default and disappears. */
+.app-logo {
+  color: #ffffff;
+}
+
 /* --- Top-level two-column layout ---
    Previously this was inline styles in App.jsx, which can't use media
    queries — on a phone-width screen, the layout still tried to render the
