@@ -33,6 +33,11 @@ export default function App() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
+  // True from the moment a send starts until its stream fully finishes.
+  // Used to disable the input/send button, so the user can't start a second
+  // stream while one is still writing — the situation that produced empty
+  // Groove bubbles with their text fused into a later turn.
+  const [isStreaming, setIsStreaming] = useState(false);
 
   const audioElRef = useRef(null);
   const [activePreviewKey, setActivePreviewKey] = useState(null);
@@ -80,13 +85,20 @@ export default function App() {
     logEvent(sessionId, 'session_start');
   }, []);
 
-  function updateLastMessage(updater) {
-    setMessages((prev) => {
-      const next = [...prev];
-      const last = next[next.length - 1];
-      next[next.length - 1] = updater(last);
-      return next;
-    });
+  // Targets a SPECIFIC message by its stable id, rather than "whatever is
+  // last in the array right now".
+  //
+  // The old updateLastMessage() wrote to messages[length - 1], which was the
+  // root cause of the empty-Groove-bubble bug: if the user sent a new message
+  // while a stream was still in flight, "last" became the NEW assistant slot,
+  // so the in-flight stream's remaining text (and its 'done' event, which
+  // clears buildingRecs) landed in the wrong bubble. The original bubble
+  // stayed empty and its "pulling a few records..." line never cleared.
+  //
+  // Keying on an id makes that structurally impossible: each stream only ever
+  // writes to the message it created, no matter what else is added meanwhile.
+  function updateMessageById(id, updater) {
+    setMessages((prev) => prev.map((m) => (m.id === id ? updater(m) : m)));
   }
 
   function collectPreviousRecommendations(msgs) {
@@ -107,13 +119,25 @@ export default function App() {
 
   async function sendMessage(newMessages) {
     setLoading(true);
+    setIsStreaming(true);
     setLoadingMessage(getRandomLoadingMessage());
 
     const previousRecommendations = collectPreviousRecommendations(newMessages);
 
+    // Every assistant message gets a stable id at creation. This stream will
+    // ONLY ever write to this id — see updateMessageById above.
+    const assistantId = `a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
     setMessages([
       ...newMessages,
-      { role: 'assistant', content: '', recs: [], followUpQuestion: '', buildingRecs: false },
+      {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        recs: [],
+        followUpQuestion: '',
+        buildingRecs: false,
+      },
     ]);
 
     try {
@@ -163,26 +187,29 @@ export default function App() {
               firstDeltaReceived = true;
               setLoading(false);
             }
-            updateLastMessage((msg) => ({ ...msg, content: msg.content + event.text }));
+            updateMessageById(assistantId, (msg) => ({
+              ...msg,
+              content: msg.content + event.text,
+            }));
           } else if (event.type === 'recs_starting') {
-            updateLastMessage((msg) => ({ ...msg, buildingRecs: true }));
+            updateMessageById(assistantId, (msg) => ({ ...msg, buildingRecs: true }));
           } else if (event.type === 'rec_ready') {
             // Progressive reveal: each card arrives on its own as its iTunes
             // lookup resolves. Append it so the grid grows 0 -> 1 -> 2 -> 3.
-            updateLastMessage((msg) => ({
+            updateMessageById(assistantId, (msg) => ({
               ...msg,
               recs: [...(msg.recs || []), event.rec],
             }));
           } else if (event.type === 'done') {
             // recs already arrived via rec_ready; done just carries the
             // closing question and clears the "preparing" state.
-            updateLastMessage((msg) => ({
+            updateMessageById(assistantId, (msg) => ({
               ...msg,
               followUpQuestion: event.followUpQuestion || '',
               buildingRecs: false,
             }));
           } else if (event.type === 'error') {
-            updateLastMessage((msg) => ({
+            updateMessageById(assistantId, (msg) => ({
               ...msg,
               buildingRecs: false,
               content:
@@ -194,7 +221,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('sendMessage failed:', err);
-      updateLastMessage((msg) => ({
+      updateMessageById(assistantId, (msg) => ({
         ...msg,
         buildingRecs: false,
         content:
@@ -203,11 +230,14 @@ export default function App() {
       }));
     } finally {
       setLoading(false);
+      setIsStreaming(false);
     }
   }
 
   function handleMomentSubmit(moment) {
-    const newMessages = [{ role: 'user', content: moment.formattedMessage }];
+    const newMessages = [
+      { id: `u-${Date.now()}`, role: 'user', content: moment.formattedMessage },
+    ];
     setMessages(newMessages);
     setPhase('chat');
     sendMessage(newMessages);
@@ -215,7 +245,14 @@ export default function App() {
 
   function handleSend() {
     if (!input.trim()) return;
-    const newMessages = [...messages, { role: 'user', content: input }];
+    // Hard guard: never start a second stream while one is still running.
+    // The UI also disables the button, but this covers Enter-key presses and
+    // any other path into handleSend.
+    if (isStreaming) return;
+    const newMessages = [
+      ...messages,
+      { id: `u-${Date.now()}`, role: 'user', content: input },
+    ];
     setMessages(newMessages);
     setInput('');
     sendMessage(newMessages);
@@ -269,16 +306,13 @@ export default function App() {
             {phase === 'chat' && (
               <div>
                 {messages.map((msg, i) => {
-                  // Don't render an empty assistant bubble before the first
-                  // token arrives — otherwise a bare "Groove:" flashes with
-                  // no content while the request is still in flight.
-                  const isStreamingPlaceholder =
-                    msg.role === 'assistant' &&
-                    i === messages.length - 1 &&
-                    loading &&
-                    msg.content === '';
-
-                  if (isStreamingPlaceholder) return null;
+                  // Never render an assistant bubble with no content. This
+                  // covers both the normal "waiting for the first token" case
+                  // AND any bubble left empty by an interrupted stream —
+                  // previously this only checked the LAST message, so an empty
+                  // bubble stranded mid-conversation still rendered as a bare
+                  // "Groove:" with nothing under it.
+                  if (msg.role === 'assistant' && !msg.content) return null;
 
                   // Show the "preparing" line only while recs are coming AND
                   // none have arrived yet. Once the first rec_ready lands,
@@ -291,7 +325,7 @@ export default function App() {
                     (!msg.recs || msg.recs.length === 0);
 
                   return (
-                    <div key={i} className="chat-message">
+                    <div key={msg.id || i} className="chat-message">
                       <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong>
                       <MessageContent content={msg.content} />
 
@@ -304,7 +338,7 @@ export default function App() {
                           <div className="rec-grid">
                             {msg.recs.map((rec, j) => (
                               <RecommendationCard
-                                key={`${i}-${j}`}
+                                key={`${msg.id || i}-${j}`}
                                 rec={rec}
                                 isPlaying={activePreviewKey === previewKeyFor(rec)}
                                 onTogglePlay={() => handleTogglePlay(rec)}
@@ -323,16 +357,37 @@ export default function App() {
                 })}
                 {loading && <p style={{ opacity: 0.6 }}>{loadingMessage}</p>}
 
+                {/* Input and Send are disabled while a reply is streaming —
+                    same pattern as ChatGPT/Claude. This is the UX half of the
+                    empty-bubble fix: it prevents the user from starting a
+                    second stream mid-reply. (updateMessageById is the
+                    correctness half — it makes cross-turn writes impossible
+                    even if a second stream somehow started.) */}
                 <div style={{ marginTop: '1.5rem', display: 'flex', gap: '8px', maxWidth: '640px' }}>
                   <input
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                    placeholder="Type a message..."
-                    style={{ flex: 1, fontSize: '16px' }}
+                    placeholder={isStreaming ? 'Groove is replying...' : 'Type a message...'}
+                    disabled={isStreaming}
+                    style={{
+                      flex: 1,
+                      fontSize: '16px',
+                      opacity: isStreaming ? 0.6 : 1,
+                      cursor: isStreaming ? 'not-allowed' : 'text',
+                    }}
                   />
-                  <button onClick={handleSend}>Send</button>
+                  <button
+                    onClick={handleSend}
+                    disabled={isStreaming || !input.trim()}
+                    style={{
+                      opacity: isStreaming || !input.trim() ? 0.5 : 1,
+                      cursor: isStreaming || !input.trim() ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Send
+                  </button>
                 </div>
               </div>
             )}
