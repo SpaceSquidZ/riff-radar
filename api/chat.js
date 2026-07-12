@@ -262,6 +262,8 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
   let announcedRecsStarting = false;
   let stopReason = null;
   const usage = { input: null, output: null, cacheRead: null, cacheWrite: null };
+  const blockTypesSeen = new Set();
+  const nonTextDeltaTypes = {};
 
   function processDeltaText(deltaText) {
     fullText += deltaText;
@@ -311,18 +313,26 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
         continue;
       }
 
-      if (payload.type === 'content_block_delta' && payload.delta?.type === 'text_delta') {
+      if (payload.type === 'content_block_start') {
+        // DIAGNOSTIC: output_tokens (~2000) is ~6x what the returned text
+        // (~1300 chars, ~350 tokens) can account for. Something is generating
+        // a large number of tokens we never see. Logging every content-block
+        // type the stream opens will identify it — if a 'thinking' block shows
+        // up here, extended thinking is on, and it is the dominant latency
+        // cost in every reply.
+        blockTypesSeen.add(payload.content_block?.type || 'unknown');
+      } else if (payload.type === 'content_block_delta' && payload.delta?.type === 'text_delta') {
         processDeltaText(payload.delta.text);
+      } else if (payload.type === 'content_block_delta' && payload.delta?.type) {
+        // Any non-text delta (thinking_delta, etc.) — count it rather than drop
+        // it silently, so we can see how much output is going somewhere else.
+        nonTextDeltaTypes[payload.delta.type] = (nonTextDeltaTypes[payload.delta.type] || 0) + 1;
       } else if (payload.type === 'message_start' && payload.message?.usage) {
-        // Input-side usage, including how much came from cache. If
-        // cache_read_input_tokens is ~0 on every call, prompt caching is NOT
-        // working and that alone would explain a large latency regression.
         usage.input = payload.message.usage.input_tokens ?? null;
         usage.cacheRead = payload.message.usage.cache_read_input_tokens ?? null;
         usage.cacheWrite = payload.message.usage.cache_creation_input_tokens ?? null;
       } else if (payload.type === 'message_delta') {
         if (payload.delta?.stop_reason) stopReason = payload.delta.stop_reason;
-        // Output-side usage. This is the number that actually drives latency.
         if (payload.usage?.output_tokens != null) usage.output = payload.usage.output_tokens;
       } else if (payload.type === 'error') {
         console.error('Anthropic in-stream error event:', payload.error);
@@ -342,7 +352,9 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
   console.log(
     `[usage] output_tokens=${usage.output} input_tokens=${usage.input} ` +
       `cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} ` +
-      `stop_reason=${stopReason} reply_chars=${fullText.length}`
+      `stop_reason=${stopReason} reply_chars=${fullText.length} ` +
+      `block_types=[${[...blockTypesSeen].join(',')}] ` +
+      `non_text_deltas=${JSON.stringify(nonTextDeltaTypes)}`
   );
 
   if (stopReason === 'max_tokens') {
