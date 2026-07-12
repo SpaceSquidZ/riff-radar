@@ -21,6 +21,8 @@ function getRandomExample() {
   return EXAMPLE_MOMENTS[Math.floor(Math.random() * EXAMPLE_MOMENTS.length)];
 }
 
+// Validates a single mm:ss timestamp (e.g. "3:20") or a range
+// like "2:15-2:45" / "2:15 - 2:45".
 function isValidTimestamp(value) {
   const trimmed = value.trim();
   const single = /^\d{1,2}:\d{2}$/;
@@ -28,28 +30,6 @@ function isValidTimestamp(value) {
   return single.test(trimmed) || range.test(trimmed);
 }
 
-function stripTrailingPunctuation(value) {
-  return value.trim().replace(/[.!?]+$/, '');
-}
-
-function buildFormattedMessage({ song, artist, timestamp, whatCaughtYou }) {
-  const cleanSong = stripTrailingPunctuation(song);
-  const cleanArtist = stripTrailingPunctuation(artist);
-  const cleanDescription = stripTrailingPunctuation(whatCaughtYou);
-
-  return (
-    `I'm listening to ${cleanSong} by ${cleanArtist}. ` +
-    `At ${timestamp.trim()}, ${cleanDescription}.` +
-    `\n\nFind me more music like this.`
-  );
-}
-
-// MomentForm no longer owns a YouTubeMomentPicker or any video-loaded state —
-// App.jsx owns the single shared picker (left column) and passes down
-// whatever the user captures there. Previously this component ALSO rendered
-// its own internal YouTubeMomentPicker with its own separate state, which is
-// what caused the duplicate "Watch this with me" picker to appear on screen:
-// two independent pickers, each unaware of the other.
 export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, titleGuess }) {
   const [example] = useState(getRandomExample);
 
@@ -62,66 +42,84 @@ export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, ti
   const [songIsGuess, setSongIsGuess] = useState(false);
   const [artistIsGuess, setArtistIsGuess] = useState(false);
 
-  // When the YouTube picker (owned by App.jsx) captures a timestamp,
-  // reflect it into this form's timestamp field.
+  // A timestamp marked in the YouTube player flows down as a prop. In that
+  // path the timestamp is essentially FREE (you're already watching, you just
+  // hit "mark"), which is exactly why requiring it manually was the expensive
+  // ask and requiring it here is not.
   useEffect(() => {
-    if (youtubeTimestamp) {
-      setTimestamp(youtubeTimestamp);
-    }
+    if (youtubeTimestamp) setTimestamp(youtubeTimestamp);
   }, [youtubeTimestamp]);
 
-  // When App.jsx's picker guesses a title, fill song/artist here — but only
-  // if the user hasn't already typed something themselves, so we never
-  // silently overwrite a real entry with a guess.
+  // Song/artist guessed from the YouTube video title. Only fills fields the
+  // user hasn't typed into, so we never silently overwrite their own input.
   useEffect(() => {
     if (!titleGuess) return;
-    if (!song.trim()) {
-      setSong(titleGuess.song);
+    setSong((prev) => {
+      if (prev.trim()) return prev;
       setSongIsGuess(true);
-    }
-    if (!artist.trim()) {
-      setArtist(titleGuess.artist);
+      return titleGuess.song || '';
+    });
+    setArtist((prev) => {
+      if (prev.trim()) return prev;
       setArtistIsGuess(true);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      return titleGuess.artist || '';
+    });
   }, [titleGuess]);
 
   function handleSubmit(e) {
     e.preventDefault();
 
-    if (!song.trim() || !artist.trim() || !timestamp.trim() || !whatCaughtYou.trim()) {
-      setError('All fields are required.');
+    // TIMESTAMP IS NOW OPTIONAL.
+    //
+    // Groove cannot hear audio. It never actually consumes the timestamp as
+    // data; everything it says about "that moment" is reconstructed from the
+    // song it knows plus what the user wrote in "what caught you". The
+    // timestamp was scaffolding that nudged people toward specificity, but it
+    // was also the single most expensive field on the form: to fill it in
+    // manually you have to go find the song, scrub to the moment, and note the
+    // time before you can even start. That cost was turning people away at the
+    // door. "What caught you" is the field that actually carries the signal,
+    // so that stays required.
+    if (!song.trim() || !artist.trim() || !whatCaughtYou.trim()) {
+      setError('Song, artist, and what caught you are needed to get started.');
       return;
     }
-    if (!isValidTimestamp(timestamp)) {
+    // Still validate the FORMAT if they did give us one.
+    if (timestamp.trim() && !isValidTimestamp(timestamp)) {
       setError('Timestamp should be mm:ss (like 3:20) or a range (like 2:15-2:45).');
       return;
     }
 
     setError('');
 
-    const formattedMessage = buildFormattedMessage({ song, artist, timestamp, whatCaughtYou });
+    const hasTimestamp = !!timestamp.trim();
+    const formattedMessage = hasTimestamp
+      ? `I'm listening to ${song.trim()} by ${artist.trim()}. ` +
+        `At ${timestamp.trim()}, ${whatCaughtYou.trim()} ` +
+        `Find me more music like this.`
+      : `I'm listening to ${song.trim()} by ${artist.trim()}. ` +
+        `What caught me: ${whatCaughtYou.trim()} ` +
+        `Find me more music like this.`;
 
     onSubmit({
       song: song.trim(),
       artist: artist.trim(),
-      timestamp: timestamp.trim(),
+      timestamp: timestamp.trim(), // may be empty
       whatCaughtYou: whatCaughtYou.trim(),
       formattedMessage,
     });
   }
 
   return (
-    <form onSubmit={handleSubmit} className="moment-form-card">
+    <form className="moment-form-card" onSubmit={handleSubmit}>
       <h2 className="moment-form-heading">Describe a moment</h2>
-      {videoLoaded && (
-        <p className="moment-form-hint">Pulled from the video on the left — check it over below.</p>
-      )}
 
       <div className="moment-form-field">
         <label htmlFor="song">
           Song title{' '}
-          {songIsGuess && <span className="moment-form-guess-tag">(from the video title, double check this)</span>}
+          {songIsGuess && (
+            <span className="moment-form-guess-tag">(from the video title, double check this)</span>
+          )}
         </label>
         <input
           id="song"
@@ -138,7 +136,9 @@ export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, ti
       <div className="moment-form-field">
         <label htmlFor="artist">
           Artist{' '}
-          {artistIsGuess && <span className="moment-form-guess-tag">(from the video title, double check this)</span>}
+          {artistIsGuess && (
+            <span className="moment-form-guess-tag">(from the video title, double check this)</span>
+          )}
         </label>
         <input
           id="artist"
@@ -153,7 +153,12 @@ export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, ti
       </div>
 
       <div className="moment-form-field">
-        <label htmlFor="timestamp">Timestamp (mm:ss, or a range like 2:15-2:45)</label>
+        <label htmlFor="timestamp">Timestamp (optional)</label>
+        <p className="moment-form-subtext">
+          {videoLoaded
+            ? 'Mark it in the video, or type it here. Skip it if you like.'
+            : 'Only if you know it. mm:ss, or a range like 2:15-2:45.'}
+        </p>
         <input
           id="timestamp"
           type="text"
@@ -166,8 +171,8 @@ export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, ti
       <div className="moment-form-field">
         <label htmlFor="whatCaughtYou">What caught you?</label>
         <p className="moment-form-subtext">
-          Take your time with this part. The more specific you are, the
-          further I can take this in directions you wouldn't expect.
+          Take your time with this part. The more specific you are, the further I
+          can take this in directions you wouldn't expect.
         </p>
         <textarea
           id="whatCaughtYou"
@@ -180,7 +185,9 @@ export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, ti
 
       {error && <p className="moment-form-error">{error}</p>}
 
-      <button type="submit" className="moment-form-submit">Find me music like this</button>
+      <button type="submit" className="moment-form-submit">
+        Find me music like this
+      </button>
     </form>
   );
 }
