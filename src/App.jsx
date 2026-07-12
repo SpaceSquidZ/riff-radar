@@ -28,6 +28,11 @@ export default function App() {
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [youtubeTimestamp, setYoutubeTimestamp] = useState('');
   const [titleGuess, setTitleGuess] = useState(null);
+  // The song the user actually bookmarked. Sent on EVERY turn so the server can
+  // look up its real genre/year/artist and ground Groove in what the track
+  // actually is, instead of letting it guess from a title that may collide with
+  // a famous song of the same name.
+  const [sourceTrack, setSourceTrack] = useState(null);
 
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -117,7 +122,7 @@ export default function App() {
     return list;
   }
 
-  async function sendMessage(newMessages) {
+  async function sendMessage(newMessages, sourceTrackOverride) {
     setLoading(true);
     setIsStreaming(true);
     setLoadingMessage(getRandomLoadingMessage());
@@ -151,6 +156,9 @@ export default function App() {
           sessionCount: 0,
           sessionId,
           previousRecommendations,
+          // Pass the override on the very first turn, because setSourceTrack
+          // has not flushed to state yet at that point.
+          sourceTrack: sourceTrackOverride || sourceTrack,
         }),
       });
 
@@ -238,9 +246,13 @@ export default function App() {
     const newMessages = [
       { id: `u-${Date.now()}`, role: 'user', content: moment.formattedMessage },
     ];
+    // MomentForm already collects these as separate fields; we were only using
+    // the formatted sentence and throwing the structured version away.
+    const track = { track: moment.song, artist: moment.artist };
+    setSourceTrack(track);
     setMessages(newMessages);
     setPhase('chat');
-    sendMessage(newMessages);
+    sendMessage(newMessages, track);
   }
 
   function handleSend() {

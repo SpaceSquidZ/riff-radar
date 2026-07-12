@@ -1,565 +1,302 @@
-// api/chat.js
+// api/lib/validateTracks.js
 //
-// Vercel serverless function. Takes a conversation history + session metadata,
-// streams Claude's reply back to the client chunk-by-chunk, validates any
-// recommendations against iTunes, drops anything that doesn't pass, and
-// logs events.
+// The anti-hallucination guard from PRD Section 7.3 / Automation 3.
+// Call from /api/chat AFTER Claude returns recommendations, BEFORE sending
+// them to the user.
 //
-// Response protocol (newline-delimited JSON, one object per line):
-//   {"type":"delta","text":"..."}              — a chunk of Groove's visible reply
-//   {"type":"recs_starting"}                    — server began the hidden rec
-//                                                 metadata; recs ARE coming (the
-//                                                 "Groove is preparing" cue)
-//   {"type":"rec_ready","rec":{...}}            — one validated card, emitted the
-//                                                 moment its own iTunes lookup
-//                                                 resolves (progressive reveal)
-//   {"type":"done","followUpQuestion":"..."}   — stream finished
-//   {"type":"error","message":"..."}            — something went wrong mid-stream
+// Validation is MULTI-STORE, and which stores get searched is decided by
+// three signals, because no single one is sufficient:
 //
-// Logs three event types to Supabase:
-//   message_sent, rec_generated, itunes_validation_failed
+//   1. Script detection — a track/artist written in non-Latin characters
+//      (你, 蛋堡, ヨルシカ) obviously needs regional stores.
+//
+//   2. A LANGUAGE HINT from the conversation — catches a song whose TITLE
+//      and ARTIST are Latin text but which is sung in another language, when
+//      the user described their moment in that language.
+//
+//   3. A per-track REGION HINT reported by Groove (rec.region) — catches the
+//      case the other two miss entirely: a Latin-script track, in an
+//      English-language session, that just isn't in the US catalog (e.g.
+//      Jorge Ben / Brazil, Fela Kuti / Nigeria). Groove knows the origin
+//      when it recommends the track; this routes validation to that store.
+//
+// Outcomes per track:
+//   'found'            — real, artist matches, has a preview
+//   'found_no_preview' — real, artist matches, no preview clip anywhere
+//   'not_found'        — no artist match in ANY searched store
+//   'unconfirmed'      — every iTunes request itself failed (network/5xx)
 
-import { GROOVE_BASE_PROMPT, getLoreAddendum } from '../src/groovePrompt.js';
-import { logEvent } from '../src/supabaseClient.js';
-import { validateOneTrack } from './lib/validateTracks.js';
+const ITUNES_BASE = 'https://itunes.apple.com/search';
 
-// Vercel kills a serverless function outright once it exceeds its max
-// execution duration — no error event, no graceful close, the connection
-// just drops. That would look exactly like a reply that silently stops
-// mid-stream with no error message. 60s is the max allowed on Vercel's
-// Hobby tier; raising it here gives real headroom for a slow upstream
-// call instead of leaving the default (much shorter) limit as an
-// invisible ceiling.
-export const config = {
-  maxDuration: 60,
+// Map a coarse language hint to the iTunes storefronts most likely to carry
+// that catalog. Keys are intentionally loose so callers can pass ISO 639-1,
+// ISO 639-3 (what `franc` emits), or a plain language name.
+const LANGUAGE_TO_STORES = {
+  // Chinese
+  zh: ['TW', 'HK', 'CN'], cmn: ['TW', 'HK', 'CN'], chinese: ['TW', 'HK', 'CN'], mandarin: ['TW', 'HK', 'CN'], cantonese: ['HK', 'TW'], yue: ['HK', 'TW'],
+  // Korean
+  ko: ['KR'], kor: ['KR'], korean: ['KR'],
+  // Japanese
+  ja: ['JP'], jpn: ['JP'], japanese: ['JP'],
+  // A few more common cases
+  th: ['TH'], tha: ['TH'], vi: ['VN'], vie: ['VN'], id: ['ID'], ind: ['ID'],
+  es: ['ES', 'MX'], spa: ['ES', 'MX'], pt: ['BR', 'PT'], por: ['BR', 'PT'],
+  fr: ['FR'], fra: ['FR'], de: ['DE'], deu: ['DE'], hi: ['IN'], hin: ['IN'],
 };
 
-const RECS_MARKER_START = '<!--';
-const HOLDBACK_CHARS = 24;
+// Map a per-track REGION hint (reported by Groove in the metadata, e.g.
+// "Brazil", "France", "Nigeria") to storefronts. This is the fix for the
+// case BOTH script detection and the conversation language hint miss: a
+// Latin-script track, in an English-language session, that simply isn't in
+// the US catalog. Groove knows Jorge Ben is Brazilian and Fela Kuti is
+// Nigerian when it recommends them; letting it say so routes validation to
+// the right store. Keys are lowercased country/region names and a few
+// common aliases.
+const REGION_TO_STORES = {
+  brazil: ['BR'], brazilian: ['BR'],
+  portugal: ['PT'], portuguese: ['PT'],
+  france: ['FR'], french: ['FR'],
+  germany: ['DE'], german: ['DE'],
+  spain: ['ES'], spanish: ['ES'],
+  mexico: ['MX'], mexican: ['MX'],
+  italy: ['IT'], italian: ['IT'],
+  nigeria: ['NG'], nigerian: ['NG'], 'west africa': ['NG'],
+  'south africa': ['ZA'],
+  jamaica: ['JM'], jamaican: ['JM'],
+  japan: ['JP'], japanese: ['JP'],
+  korea: ['KR'], 'south korea': ['KR'], korean: ['KR'],
+  china: ['CN'], chinese: ['CN'],
+  taiwan: ['TW'], taiwanese: ['TW'],
+  'hong kong': ['HK'],
+  thailand: ['TH'], thai: ['TH'],
+  vietnam: ['VN'], vietnamese: ['VN'],
+  indonesia: ['ID'], indonesian: ['ID'],
+  india: ['IN'], indian: ['IN'],
+  sweden: ['SE'], norway: ['NO'], iceland: ['IS'],
+  netherlands: ['NL'], dutch: ['NL'],
+  uk: ['GB'], 'united kingdom': ['GB'], britain: ['GB'], british: ['GB'], england: ['GB'],
+  canada: ['CA'], australia: ['AU'],
+};
 
-function extractStructuredRecs(replyText) {
-  const match = replyText.match(/<!--RIFF_RADAR_RECS:(\{.*?\})-->/s);
-  if (!match) return { recs: [], followUpQuestion: '', cleanedReply: replyText };
+// Fallback set when a track has non-Latin characters but we have no more
+// specific language hint.
+const GENERIC_NON_LATIN_STORES = ['TW', 'HK', 'JP', 'KR', 'CN'];
 
-  let parsed = {};
-  try {
-    parsed = JSON.parse(match[1]);
-  } catch (err) {
-    console.error('Failed to parse RIFF_RADAR_RECS block:', err, match[1]);
+function hasNonLatin(s) {
+  return /[^\u0000-\u024f]/.test(s || '');
+}
+
+function normalizeArtist(name) {
+  return (name || '')
+    .toLowerCase()
+    .replace(/\(feat[^)]*\)/g, '')
+    .replace(/\bfeat\.?\s.*$/, '')
+    .replace(/\bft\.?\s.*$/, '')
+    .replace(/\bfeaturing\s.*$/, '')
+    .trim();
+}
+
+// Splits a credited-artist string into its individual artists so a collab
+// can be matched against EITHER name, not just the first. iTunes sometimes
+// files "The Roots feat. Erykah Badu" under "Erykah Badu" as the primary
+// artist; matching only the leading name ("The Roots") then wrongly fails.
+// Returns e.g. ["the roots", "erykah badu"] for "The Roots feat. Erykah Badu".
+function artistCandidates(name) {
+  const raw = name || '';
+  const parts = raw
+    .split(/\bfeat\.?\b|\bft\.?\b|\bfeaturing\b|,|&|\bx\b|\bwith\b|\/|\band\b/i)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const cands = parts.length > 0 ? parts : [raw];
+  // Also include the fully-normalized whole string as a candidate.
+  return [...new Set([...cands.map((c) => normalizeArtist(c)), normalizeArtist(raw)])].filter(Boolean);
+}
+
+function oneArtistMatches(a, b) {
+  const na = normalizeArtist(a);
+  const nb = normalizeArtist(b);
+  if (!na || !nb) return false;
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
+// True if ANY named artist in the recommendation matches ANY named artist in
+// the iTunes result — the dual-direction check that fixes collab crediting.
+function artistsMatch(itunesArtist, recArtist) {
+  const recCands = artistCandidates(recArtist);
+  const itunesCands = artistCandidates(itunesArtist);
+  for (const rc of recCands) {
+    for (const ic of itunesCands) {
+      if (oneArtistMatches(ic, rc)) return true;
+    }
+  }
+  return false;
+}
+
+// Decides which storefronts to search for one track. US is always included.
+// Regional stores are added from three signals, any of which can apply:
+//   - the track's REGION hint from Groove (rec.region) — the strongest, and
+//     the only one that catches Latin-script non-US catalog in an English
+//     session (Brazilian, French, Nigerian, etc.)
+//   - the conversation LANGUAGE hint
+//   - non-Latin characters in the track/artist itself
+// Deduped, US first.
+function storesFor(rec, languageHint) {
+  const set = new Set(['US']);
+
+  const regionKey = (rec.region || '').toLowerCase().trim();
+  if (regionKey && REGION_TO_STORES[regionKey]) {
+    for (const s of REGION_TO_STORES[regionKey]) set.add(s);
   }
 
-  const cleanedReply = replyText.replace(match[0], '').trimEnd();
+  const hintKey = (languageHint || '').toLowerCase().trim();
+  if (hintKey && LANGUAGE_TO_STORES[hintKey]) {
+    for (const s of LANGUAGE_TO_STORES[hintKey]) set.add(s);
+  }
+
+  if (hasNonLatin(rec.track) || hasNonLatin(rec.artist)) {
+    for (const s of GENERIC_NON_LATIN_STORES) set.add(s);
+  }
+
+  return [...set];
+}
+
+async function searchStore(term, country) {
+  const url = `${ITUNES_BASE}?term=${encodeURIComponent(term)}&entity=song&limit=5&country=${country}`;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.results || [];
+  } catch (err) {
+    console.error(`iTunes search failed (${country}) for "${term}":`, err);
+    return null;
+  }
+}
+
+export async function validateOneTrack(rec, languageHint) {
+  const term = `${rec.track} ${rec.artist}`;
+  const stores = storesFor(rec, languageHint);
+
+  const storeResults = await Promise.all(stores.map((c) => searchStore(term, c)));
+
+  let anyRequestSucceeded = false;
+  const artistMatches = [];
+
+  for (const results of storeResults) {
+    if (results === null) continue;
+    anyRequestSucceeded = true;
+    for (const r of results) {
+      if (artistsMatch(r.artistName, rec.artist)) artistMatches.push(r);
+    }
+  }
+
+  if (!anyRequestSucceeded) {
+    return { status: 'unconfirmed', enriched: null };
+  }
+
+  if (artistMatches.length === 0) {
+    return { status: 'not_found', enriched: null };
+  }
+
+  const withPreview = artistMatches.find((m) => m.previewUrl);
+  const best = withPreview || artistMatches[0];
+
   return {
-    recs: Array.isArray(parsed.recs) ? parsed.recs : [],
-    followUpQuestion: typeof parsed.followUpQuestion === 'string' ? parsed.followUpQuestion : '',
-    cleanedReply,
+    status: withPreview ? 'found' : 'found_no_preview',
+    enriched: {
+      previewUrl: best.previewUrl || null,
+      artworkUrl: best.artworkUrl100 ? best.artworkUrl100.replace('100x100', '400x400') : null,
+      trackViewUrl: best.trackViewUrl || null,
+      releaseYear: best.releaseDate ? best.releaseDate.slice(0, 4) : null,
+    },
   };
 }
 
-const STATIC_APP_INSTRUCTIONS = `# App-specific overrides for Riff Radar
-
-# Reasoning effort
-Do not overthink these replies. This is a music companion, not a math problem. You are
-recalling music you already know well and writing a couple of warm, specific sentences
-about it. Extended reasoning adds latency the user feels directly as a slow reply, and it
-rarely improves a recommendation. Reason briefly, then answer. Save deeper thinking for
-the genuinely hard cases (an obscure track you're unsure about, a request that needs
-untangling), not for routine recommendations or ordinary conversation.
-
-This app renders recommendations as visual cards (art, preview player, real Apple
-Music and Spotify links) and does not display raw links or per-song paragraphs in
-the chat text. Overrides to your normal behavior, for this app only:
-
-1. Do NOT include a Spotify or Apple Music search link anywhere in your visible reply.
-
-2. Whenever you would give the 3-recommendation block: your VISIBLE reply text must
-contain ONLY your opening reflection on the moment the user shared. HARD LIMIT: a
-MAXIMUM of 3 sentences, and they should be normal conversational sentences, not long
-winding ones. Two is often better than three. Cover what made the moment hit, plus one
-short beat of your own genuine reaction. Then STOP.
-
-This limit is absolute and overrides any instinct to elaborate, qualify, or add one more
-observation. Going long here costs the user real waiting time before they see any tracks,
-and it can starve the recommendation data below of the room it needs. If you find
-yourself writing a fourth sentence, cut it.
-
-Do NOT include song titles, artist names, per-song explanations, or your closing beat in
-the visible text. All of that goes in the hidden metadata block below, because the app
-renders it separately (cards, then your closing beat underneath).
-
-NO KAOMOJI in this reflection, under any circumstances. Not at the end, not in the middle.
-This is the expert register and it stays clean. Kaomoji belong in conversational turns and
-in the closing beat, never here.
-
-2a. CRITICAL — your closing beat (the warm line plus the two directions) goes ONLY in the
-followUpQuestion field of the hidden metadata, NEVER in your visible reply text. Do not
-end your visible reflection with it, or with any rephrasing of it. The app renders it
-beneath the cards from the metadata field; if you also write it in your prose it appears
-TWICE to the user. Your visible reply must simply stop after the opening reflection.
-
-2b. NEVER state or imply a specific NUMBER of recommendations in your visible reply.
-Do not write "here are three directions", "three picks", "a trio", or any counted
-lead-in — the app may show fewer than three cards (some can't be verified), so any
-number you name can be contradicted on screen. Either use count-free phrasing ("here
-are a few directions from there") or let the cards simply follow your reflection with
-no lead-in at all.
-
-3. The 3 recommended artists in a single response must all be DIFFERENT FROM EACH
-OTHER, not just different from the bookmarked artist. Never recommend the same artist
-twice across the 3 slots.
-
-4. When you have asked the user an either/or refinement question and they reply,
-interpret their answer GENEROUSLY. Users answer casually and partially, not by
-quoting your exact options. Treat replies like "other english is fine", "the second
-one", "yeah the weirder beat", "let's go broader", "stay put", "the first", "more of
-that" as clear, valid selections — map them to whichever option they most plausibly
-mean and act on it. Do NOT tell the user they didn't pick an option, do NOT re-ask the
-same question, and do NOT stall for a more precise answer. Only ask for clarification
-if a reply is genuinely ambiguous between your two options (not merely informal). When
-in doubt, pick the more likely reading and proceed — moving forward with a reasonable
-guess is far better than making the user feel they answered wrong.
-
-If your reply is pure conversation with no recommendations, ignore the length
-restriction in #2 and respond completely normally with no length restriction.
-
-# Machine-readable recommendation metadata (internal, never shown to the user)
-Whenever your reply includes the 3-recommendation block, end your entire response
-with exactly one HTML comment on its own line, after everything else, in this exact format:
-<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","region":"Country of origin","explanation":"One single sentence, 20 words or fewer, on the musical link."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","region":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","region":"...","explanation":"..."}],"followUpQuestion":"Your normal closing refinement question, offering two concrete directions."}-->
-"matchAxis" must be exactly one of: "Structural twin", "Adjacent genre", "Surprise pick",
-matching which of the 3 slots each track fills. "region" is the artist's country of
-origin as a plain English name ("Brazil", "Nigeria", "Japan", "France", "USA", "UK",
-etc.) — this helps the app find the track in the correct regional music catalog, so be
-accurate; use "USA" if you're unsure or the artist is American. "explanation" MUST be
-exactly one sentence, 20 words or fewer, plain text, no markdown, no links.
-
-"followUpQuestion" is your CLOSING BEAT, not a menu. It is the last thing the user reads
-and it decides whether they reply at all, so it must do two things, in this order:
-  1. ONE warm or curious sentence. This must be about THE USER or about THE MOMENT THEY
-     SHARED, not about a specific recommended track. A reaction of your own to what they
-     described, something you noticed about their taste, a question you actually want the
-     answer to, or a fragment of a story about the source song.
-  2. THEN the two concrete directions, described by their QUALITY or FEEL, so refining
-     stays effortless.
-
-CRITICAL — do NOT name any of the 3 recommended tracks or their artists in this field.
-The app validates every recommendation against a real music catalog and silently DROPS
-any it cannot verify, which happens after you write this. If you name a track here and
-that track gets dropped, the user reads a sentence pointing at a card that is not on their
-screen, which is confusing and makes you look careless. Refer to directions, not titles:
-"the one with the groove still under it" rather than "the Kiefer track."
-
-Roughly two sentences total, plain text, no markdown. A kaomoji is allowed here (this is a
-conversational turn, not the pre-card reflection) but only occasionally, not every time.
-Examples:
-  "That spiral you pointed at is rarer than people think, most listeners walk right past
-   it. Want to stay in that floating register, or should I pull toward something with a
-   pulse under it?"
-  "You keep landing on tracks where the vocal is barely there. I'm noticing a pattern
-   (・_・) Want me to lean into that, or break it on purpose?"
-  "Honestly I'd put the last of these on if it were just me up here tonight. More of that
-   horn-driven side, or something quieter?"
-
-Do not include this comment if your reply does not contain recommendations. This comment
-is stripped before the user sees your reply, so none of it needs to fit your voice or
-formatting rules.`;
-
-function buildDynamicBlock(loreAddendum, previousRecommendations) {
-  const loreText = loreAddendum || '(No lore addendum active yet — this is a new user.)';
-
-  let doNotRepeatText = '';
-  if (Array.isArray(previousRecommendations) && previousRecommendations.length > 0) {
-    const list = previousRecommendations
-      .map((r) => `"${r.track}" by ${r.artist}`)
-      .join(', ');
-    doNotRepeatText =
-      `\n\n# Tracks already recommended this session\n` +
-      `Do NOT recommend any of these tracks again in this session, even if they'd ` +
-      `otherwise be a great fit: ${list}. Pick different tracks instead.`;
-  }
-
-  return loreText + doNotRepeatText;
+// languageHint is optional — a coarse language code or name derived from the
+// user's own words (see chat.js). When absent, validation still works via
+// script detection; the hint only widens the store net for the
+// English-title / non-English-audio case.
+export async function validateAndEnrichRecs(recs, languageHint) {
+  const results = await Promise.all(
+    recs.map(async (rec) => {
+      const { status, enriched } = await validateOneTrack(rec, languageHint);
+      return {
+        ...rec,
+        itunesValidation: status,
+        previewUrl: enriched?.previewUrl ?? null,
+        artworkUrl: enriched?.artworkUrl ?? null,
+        trackViewUrl: enriched?.trackViewUrl ?? null,
+        releaseYear: enriched?.releaseYear ?? null,
+      };
+    })
+  );
+  return results;
 }
 
-// Both static blocks now use a 1-HOUR cache TTL instead of the 5-minute
-// default. Rationale: this is a conversational app where a real person
-// reads a reply, thinks, maybe listens to a preview, then responds — gaps
-// between actual API calls of more than 5 minutes are normal human
-// behavior, not an edge case. Under the 5-minute default, most real
-// conversational turns would miss the cache entirely and pay full
-// uncached processing cost (which is also the slow path) on nearly every
-// message. The 1-hour TTL costs more on the first write in a given
-// window (2x base price vs 1.25x) but every read within that hour is the
-// same 90%-cheaper, faster cached path — worth it for this usage pattern.
-const CACHE_CONTROL_1H = { type: 'ephemeral', ttl: '1h' };
+// ---------------------------------------------------------------------------
+// SOURCE TRACK GROUNDING
+//
+// The recommendations were being validated against a real catalog, but the
+// user's OWN song never was. So Groove reasoned about it purely from its title
+// and artist string, with no ground truth, and title collisions wrecked it:
+// given "Blue in Green" by kiki lili vivi (a modern Japanese track), Groove
+// pattern-matched the title to the 1959 Miles Davis / Bill Evans jazz standard
+// and anchored all three recommendations to the wrong song.
+//
+// This looks the user's track up in the same multi-store catalog and returns
+// hard facts (real artist name as listed, genre, release year, storefront) so
+// the prompt can tell Groove what the song ACTUALLY is.
+//
+// Cached in-memory. Vercel reuses serverless containers between requests, so
+// follow-up turns in the same conversation usually hit this cache and pay no
+// lookup cost at all. Only the first turn of a conversation pays for it.
+// ---------------------------------------------------------------------------
 
-function buildSystemBlocks(loreAddendum, previousRecommendations) {
-  return [
-    {
-      type: 'text',
-      text: GROOVE_BASE_PROMPT,
-      cache_control: CACHE_CONTROL_1H,
-    },
-    {
-      type: 'text',
-      text: STATIC_APP_INSTRUCTIONS,
-      cache_control: CACHE_CONTROL_1H,
-    },
-    {
-      type: 'text',
-      text: buildDynamicBlock(loreAddendum, previousRecommendations),
-      // Deliberately uncached — the one block that actually changes per
-      // request (lore stage, growing do-not-repeat list).
-    },
-  ];
-}
+const sourceFactsCache = new Map();
+const SOURCE_CACHE_MAX = 500;
 
-const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 529]);
+export async function lookupTrackFacts(track, artist, languageHint) {
+  if (!track || !artist) return null;
 
-// Coarse language sniff from the user's own words, used only to widen which
-// iTunes storefronts we search during validation. This is deliberately
-// simple (script-range heuristics, not a full language model) because it
-// only needs to answer "should we also look in the Korean / Chinese /
-// Japanese store?" — a wrong guess just means an extra store search or a
-// missed one, never a broken reply. If the client ever passes an explicit
-// franc-derived code, that takes precedence over this.
-function detectLanguageHint(messages) {
-  const userText = messages
-    .filter((m) => m.role === 'user')
-    .map((m) => m.content)
-    .join(' ');
+  const cacheKey = `${track.toLowerCase().trim()}::${artist.toLowerCase().trim()}::${languageHint || ''}`;
+  if (sourceFactsCache.has(cacheKey)) return sourceFactsCache.get(cacheKey);
 
-  // Script ranges are the strongest signal when present.
-  if (/[\uac00-\ud7af]/.test(userText)) return 'ko'; // Hangul
-  if (/[\u3040-\u30ff]/.test(userText)) return 'ja'; // kana (hiragana/katakana)
-  if (/[\u4e00-\u9fff]/.test(userText)) return 'zh'; // CJK ideographs
-  if (/[\u0e00-\u0e7f]/.test(userText)) return 'th'; // Thai
-
-  return null; // no strong signal — validation falls back to script + US
-}
-
-async function callAnthropicStream({ messages, loreAddendum, previousRecommendations }) {
-  return fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-5',
-      // Raised as a safety net. max_tokens is a hard cap on TOTAL output,
-      // which includes thinking tokens, not just the reply text. That is why
-      // a ~1,300-character reply was hitting a 3,072 ceiling: most of the
-      // budget was going to thinking.
-      max_tokens: 4096,
-
-      // THE BIG LATENCY LEVER.
-      //
-      // Sonnet 5 uses "adaptive thinking" by default when no thinking
-      // parameter is passed, and the [usage] logs proved it was spending
-      // ~1,200 to 2,100 tokens per reply on invisible reasoning, roughly
-      // 80-85% of all generated tokens. That thinking is the dominant cost of
-      // every response's wall-clock time.
-      //
-      // Riff Radar does not need deep multi-step reasoning. Groove is
-      // recalling music he knows and writing two warm sentences about it. That
-      // is exactly the "speed matters" case low effort is designed for.
-      //
-      // We stay in adaptive mode (rather than disabling thinking outright) for
-      // two reasons: it preserves prompt cache breakpoints, and it still lets
-      // the model think a little on the genuinely harder turns instead of
-      // never thinking at all.
-      output_config: { effort: 'low' },
-
-      stream: true,
-      system: buildSystemBlocks(loreAddendum, previousRecommendations),
-      messages,
-    }),
-  });
-}
-
-async function streamClaudeReply({ messages, loreAddendum, previousRecommendations, res }) {
-  let anthropicRes = await callAnthropicStream({ messages, loreAddendum, previousRecommendations });
-
-  if (!anthropicRes.ok && RETRYABLE_STATUSES.has(anthropicRes.status)) {
-    console.warn(`Anthropic API returned ${anthropicRes.status}, retrying once.`);
-    anthropicRes = await callAnthropicStream({ messages, loreAddendum, previousRecommendations });
-  }
-
-  if (!anthropicRes.ok || !anthropicRes.body) {
-    const errorBody = await anthropicRes.text().catch(() => '');
-    console.error('Anthropic API error after retry:', anthropicRes.status, errorBody);
-    throw new Error(`Claude API request failed (${anthropicRes.status}): ${errorBody.slice(0, 500)}`);
-  }
-
-  const reader = anthropicRes.body.getReader();
-  const decoder = new TextDecoder();
-
-  let sseBuffer = '';
-  let fullText = '';
-  let emittedLength = 0;
-  let commentStartIdx = -1;
-  let announcedRecsStarting = false;
-  let stopReason = null;
-  const usage = { input: null, output: null, cacheRead: null, cacheWrite: null };
-  const blockTypesSeen = new Set();
-  const nonTextDeltaTypes = {};
-
-  function processDeltaText(deltaText) {
-    fullText += deltaText;
-
-    if (commentStartIdx === -1) {
-      commentStartIdx = fullText.indexOf(RECS_MARKER_START);
-    }
-
-    if (commentStartIdx !== -1) {
-      if (!announcedRecsStarting) {
-        announcedRecsStarting = true;
-        res.write(JSON.stringify({ type: 'recs_starting' }) + '\n');
-      }
-
-      if (emittedLength < commentStartIdx) {
-        const safe = fullText.slice(emittedLength, commentStartIdx);
-        if (safe) res.write(JSON.stringify({ type: 'delta', text: safe }) + '\n');
-        emittedLength = commentStartIdx;
-      }
-      return;
-    }
-
-    const safeEnd = Math.max(0, fullText.length - HOLDBACK_CHARS);
-    if (safeEnd > emittedLength) {
-      const safe = fullText.slice(emittedLength, safeEnd);
-      if (safe) res.write(JSON.stringify({ type: 'delta', text: safe }) + '\n');
-      emittedLength = safeEnd;
-    }
-  }
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    sseBuffer += decoder.decode(value, { stream: true });
-    const events = sseBuffer.split('\n\n');
-    sseBuffer = events.pop();
-
-    for (const rawEvent of events) {
-      const dataLine = rawEvent.split('\n').find((l) => l.startsWith('data:'));
-      if (!dataLine) continue;
-
-      let payload;
-      try {
-        payload = JSON.parse(dataLine.slice(5).trim());
-      } catch {
-        continue;
-      }
-
-      if (payload.type === 'content_block_start') {
-        // DIAGNOSTIC: output_tokens (~2000) is ~6x what the returned text
-        // (~1300 chars, ~350 tokens) can account for. Something is generating
-        // a large number of tokens we never see. Logging every content-block
-        // type the stream opens will identify it — if a 'thinking' block shows
-        // up here, extended thinking is on, and it is the dominant latency
-        // cost in every reply.
-        blockTypesSeen.add(payload.content_block?.type || 'unknown');
-      } else if (payload.type === 'content_block_delta' && payload.delta?.type === 'text_delta') {
-        processDeltaText(payload.delta.text);
-      } else if (payload.type === 'content_block_delta' && payload.delta?.type) {
-        // Any non-text delta (thinking_delta, etc.) — count it rather than drop
-        // it silently, so we can see how much output is going somewhere else.
-        nonTextDeltaTypes[payload.delta.type] = (nonTextDeltaTypes[payload.delta.type] || 0) + 1;
-      } else if (payload.type === 'message_start' && payload.message?.usage) {
-        usage.input = payload.message.usage.input_tokens ?? null;
-        usage.cacheRead = payload.message.usage.cache_read_input_tokens ?? null;
-        usage.cacheWrite = payload.message.usage.cache_creation_input_tokens ?? null;
-      } else if (payload.type === 'message_delta') {
-        if (payload.delta?.stop_reason) stopReason = payload.delta.stop_reason;
-        if (payload.usage?.output_tokens != null) usage.output = payload.usage.output_tokens;
-      } else if (payload.type === 'error') {
-        console.error('Anthropic in-stream error event:', payload.error);
-      }
-    }
-  }
-
-  if (commentStartIdx === -1 && emittedLength < fullText.length) {
-    res.write(JSON.stringify({ type: 'delta', text: fullText.slice(emittedLength) }) + '\n');
-    emittedLength = fullText.length;
-  }
-
-  // Always log usage, not only on truncation. This is the instrument that tells
-  // us whether a slow response was caused by long output, a cache miss, or
-  // something else — instead of inferring it from character counts, which do
-  // not map cleanly onto tokens (especially with kaomoji and CJK text).
-  console.log(
-    `[usage] output_tokens=${usage.output} input_tokens=${usage.input} ` +
-      `cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} ` +
-      `stop_reason=${stopReason} reply_chars=${fullText.length} ` +
-      `block_types=[${[...blockTypesSeen].join(',')}] ` +
-      `non_text_deltas=${JSON.stringify(nonTextDeltaTypes)}`
+  const term = `${track} ${artist}`;
+  const stores = storesFor({ track, artist }, languageHint);
+  const storeResults = await Promise.all(
+    stores.map(async (c) => ({ country: c, results: await searchStore(term, c) }))
   );
 
-  if (stopReason === 'max_tokens') {
-    console.warn(
-      `Groove reply TRUNCATED by max_tokens. output_tokens=${usage.output} ` +
-        `reply_chars=${fullText.length}. This means the hidden metadata block was ` +
-        `likely cut off, so no recommendation cards rendered. ` +
-        `First 120 chars: ${JSON.stringify(fullText.slice(0, 120))}`
-    );
-  }
-
-  return fullText;
-}
-
-// Fire-and-forget wrapper around logEvent.
-//
-// The Vercel logs showed Supabase writes failing with ECONNRESET and ETIMEDOUT.
-// Those are network problems reaching Supabase, not bugs in our logic, and they
-// are already non-fatal. But an un-awaited promise that hangs on a TCP timeout
-// can keep the serverless function alive and push it toward its maxDuration
-// ceiling, which turns a harmless logging blip into a user-visible timeout.
-//
-// This makes the intent explicit: analytics must NEVER delay or break a reply.
-// We swallow the failure loudly (so it still shows up in logs) and move on.
-function logEventSafe(sessionId, eventType, payload) {
-  if (!sessionId) return;
-  try {
-    Promise.resolve(logEvent(sessionId, eventType, payload)).catch((err) => {
-      console.error(`Non-fatal: failed to log ${eventType}:`, err?.message || err);
-    });
-  } catch (err) {
-    console.error(`Non-fatal: failed to log ${eventType}:`, err?.message || err);
-  }
-}
-
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const { messages: rawMessages, sessionCount = 0, sessionId, previousRecommendations = [], languageHint: clientLanguageHint } = req.body;
-
-  if (!rawMessages || !Array.isArray(rawMessages)) {
-    return res.status(400).json({ error: 'messages array is required' });
-  }
-
-  const messages = rawMessages.map(({ role, content }) => ({ role, content }));
-
-  res.writeHead(200, {
-    'Content-Type': 'application/x-ndjson',
-    'Cache-Control': 'no-cache',
-    'X-Accel-Buffering': 'no',
-  });
-
-  try {
-    const lastUserMessage = messages[messages.length - 1];
-    if (sessionId && lastUserMessage?.role === 'user') {
-      logEventSafe(sessionId, 'message_sent', {
-        role: 'user',
-        content_length: lastUserMessage.content.length,
-      });
-    }
-
-    const loreAddendum = getLoreAddendum(sessionCount);
-
-    const rawReplyText = await streamClaudeReply({
-      messages,
-      loreAddendum,
-      previousRecommendations,
-      res,
-    });
-    const { recs, followUpQuestion, cleanedReply } = extractStructuredRecs(rawReplyText);
-
-    let replyText = cleanedReply;
-    let enrichedRecs = [];
-
-    if (recs.length > 0) {
-      const languageHint = clientLanguageHint || detectLanguageHint(messages);
-
-      // Progressive validation (Option 3): instead of validating all three
-      // tracks, waiting for the slowest, then sending them together, each
-      // track is validated in parallel and its card is emitted the moment
-      // ITS OWN iTunes lookup returns. The frontend appends cards as they
-      // arrive, so the grid grows 0 -> 1 -> 2 -> 3 rather than appearing all
-      // at once after a dead pause. Growing never looks like the "dwindling"
-      // a fixed 3-skeleton grid did, because cards are only ever added.
-      const kept = [];
-      const dropped = [];
-
-      await Promise.all(
-        recs.map(async (rec) => {
-          const { status, enriched } = await validateOneTrack(rec, languageHint);
-          const enrichedRec = {
-            ...rec,
-            itunesValidation: status,
-            previewUrl: enriched?.previewUrl ?? null,
-            artworkUrl: enriched?.artworkUrl ?? null,
-            trackViewUrl: enriched?.trackViewUrl ?? null,
-            releaseYear: enriched?.releaseYear ?? null,
-          };
-
-          if (status !== 'not_found') {
-            // Real track (or unconfirmed network failure) — show it now.
-            kept.push(enrichedRec);
-            res.write(JSON.stringify({ type: 'rec_ready', rec: enrichedRec }) + '\n');
-          } else {
-            // Hold confirmed hallucinations; whether they show at all depends
-            // on whether ANYTHING else survived (see fallback below).
-            dropped.push(enrichedRec);
-          }
-        })
-      );
-
-      if (sessionId && dropped.length > 0) {
-        logEventSafe(sessionId, 'itunes_validation_failed', {
-          failed_tracks: dropped.map((r) => ({ track: r.track, artist: r.artist })),
-          failed_count: dropped.length,
-          total_recs: recs.length,
-        });
-      }
-
-      // Last-resort fallback: if EVERY track failed validation, don't leave
-      // the user with a lead-in and no tracks — emit the dropped ones now as
-      // minimal cards (Groove's text + a Spotify search link, which works in
-      // any language and can't present fabricated preview/artwork/Apple data
-      // as real). Only reached when nothing else survived.
-      if (kept.length === 0 && dropped.length > 0) {
-        for (const rec of dropped) {
-          res.write(JSON.stringify({ type: 'rec_ready', rec }) + '\n');
-        }
-        enrichedRecs = dropped;
-      } else {
-        enrichedRecs = kept;
+  let best = null;
+  let foundIn = null;
+  for (const { country, results } of storeResults) {
+    if (!results) continue;
+    const match = results.find((r) => artistsMatch(r.artistName, artist));
+    if (match) {
+      // Prefer a match that carries a genre; otherwise take the first hit.
+      if (!best || (!best.primaryGenreName && match.primaryGenreName)) {
+        best = match;
+        foundIn = country;
       }
     }
-
-    if (sessionId) {
-      logEventSafe(sessionId, 'message_sent', {
-        role: 'assistant',
-        content_length: replyText.length,
-      });
-
-      if (enrichedRecs.length > 0) {
-        logEventSafe(sessionId, 'rec_generated', {
-          recommendation_count: enrichedRecs.length,
-          tracks: enrichedRecs.map((r) => `${r.track} - ${r.artist}`),
-        });
-      }
-    }
-
-    res.write(JSON.stringify({ type: 'done', followUpQuestion }) + '\n');
-    res.end();
-  } catch (err) {
-    console.error('Error in /api/chat:', err);
-    try {
-      res.write(
-        JSON.stringify({
-          type: 'error',
-          message: 'Groove hit a snag putting that together. Mind trying that message again?',
-        }) + '\n'
-      );
-    } catch {
-      // response may already be closed
-    }
-    res.end();
   }
+
+  const facts = best
+    ? {
+        found: true,
+        trackName: best.trackName || track,
+        artistName: best.artistName || artist,
+        genre: best.primaryGenreName || null,
+        releaseYear: best.releaseDate ? best.releaseDate.slice(0, 4) : null,
+        albumName: best.collectionName || null,
+        storefront: foundIn,
+      }
+    : { found: false };
+
+  // Naive size cap: clear the whole cache if it grows unbounded. This runs in a
+  // short-lived serverless container, so a simple bound is enough.
+  if (sourceFactsCache.size >= SOURCE_CACHE_MAX) sourceFactsCache.clear();
+  sourceFactsCache.set(cacheKey, facts);
+
+  return facts;
 }

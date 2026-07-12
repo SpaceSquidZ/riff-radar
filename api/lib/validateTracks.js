@@ -232,3 +232,71 @@ export async function validateAndEnrichRecs(recs, languageHint) {
   );
   return results;
 }
+
+// ---------------------------------------------------------------------------
+// SOURCE TRACK GROUNDING
+//
+// The recommendations were being validated against a real catalog, but the
+// user's OWN song never was. So Groove reasoned about it purely from its title
+// and artist string, with no ground truth, and title collisions wrecked it:
+// given "Blue in Green" by kiki lili vivi (a modern Japanese track), Groove
+// pattern-matched the title to the 1959 Miles Davis / Bill Evans jazz standard
+// and anchored all three recommendations to the wrong song.
+//
+// This looks the user's track up in the same multi-store catalog and returns
+// hard facts (real artist name as listed, genre, release year, storefront) so
+// the prompt can tell Groove what the song ACTUALLY is.
+//
+// Cached in-memory. Vercel reuses serverless containers between requests, so
+// follow-up turns in the same conversation usually hit this cache and pay no
+// lookup cost at all. Only the first turn of a conversation pays for it.
+// ---------------------------------------------------------------------------
+
+const sourceFactsCache = new Map();
+const SOURCE_CACHE_MAX = 500;
+
+export async function lookupTrackFacts(track, artist, languageHint) {
+  if (!track || !artist) return null;
+
+  const cacheKey = `${track.toLowerCase().trim()}::${artist.toLowerCase().trim()}::${languageHint || ''}`;
+  if (sourceFactsCache.has(cacheKey)) return sourceFactsCache.get(cacheKey);
+
+  const term = `${track} ${artist}`;
+  const stores = storesFor({ track, artist }, languageHint);
+  const storeResults = await Promise.all(
+    stores.map(async (c) => ({ country: c, results: await searchStore(term, c) }))
+  );
+
+  let best = null;
+  let foundIn = null;
+  for (const { country, results } of storeResults) {
+    if (!results) continue;
+    const match = results.find((r) => artistsMatch(r.artistName, artist));
+    if (match) {
+      // Prefer a match that carries a genre; otherwise take the first hit.
+      if (!best || (!best.primaryGenreName && match.primaryGenreName)) {
+        best = match;
+        foundIn = country;
+      }
+    }
+  }
+
+  const facts = best
+    ? {
+        found: true,
+        trackName: best.trackName || track,
+        artistName: best.artistName || artist,
+        genre: best.primaryGenreName || null,
+        releaseYear: best.releaseDate ? best.releaseDate.slice(0, 4) : null,
+        albumName: best.collectionName || null,
+        storefront: foundIn,
+      }
+    : { found: false };
+
+  // Naive size cap: clear the whole cache if it grows unbounded. This runs in a
+  // short-lived serverless container, so a simple bound is enough.
+  if (sourceFactsCache.size >= SOURCE_CACHE_MAX) sourceFactsCache.clear();
+  sourceFactsCache.set(cacheKey, facts);
+
+  return facts;
+}
