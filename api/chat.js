@@ -64,13 +64,20 @@ the chat text. Overrides to your normal behavior, for this app only:
 1. Do NOT include a Spotify or Apple Music search link anywhere in your visible reply.
 
 2. Whenever you would give the 3-recommendation block: your VISIBLE reply text must
-contain ONLY your opening reflection on the moment the user shared (2 to 3 sentences:
-what made it hit, plus one beat of your own genuine reaction, in your normal voice). Do
-NOT include song titles, artist names, per-song explanations, or your closing refinement
-question in the visible text. All of that moves into the hidden metadata block below,
-because the app renders it separately (cards, then your closing beat underneath). Keep
-this tight: the user came for tracks, don't make them wait. No kaomoji here, this is the
-expert register.
+contain ONLY your opening reflection on the moment the user shared. HARD LIMIT: a
+MAXIMUM of 3 sentences, and they should be normal conversational sentences, not long
+winding ones. Two is often better than three. Cover what made the moment hit, plus one
+short beat of your own genuine reaction. Then STOP.
+
+This limit is absolute and overrides any instinct to elaborate, qualify, or add one more
+observation. Going long here costs the user real waiting time before they see any tracks,
+and it can starve the recommendation data below of the room it needs. If you find
+yourself writing a fourth sentence, cut it.
+
+Do NOT include song titles, artist names, per-song explanations, or your closing beat in
+the visible text. All of that goes in the hidden metadata block below, because the app
+renders it separately (cards, then your closing beat underneath). No kaomoji here, this
+is the expert register.
 
 2a. CRITICAL — your closing beat (the warm line plus the two directions) goes ONLY in the
 followUpQuestion field of the hidden metadata, NEVER in your visible reply text. Do not
@@ -218,7 +225,12 @@ async function callAnthropicStream({ messages, loreAddendum, previousRecommendat
     },
     body: JSON.stringify({
       model: 'claude-sonnet-5',
-      max_tokens: 3072,
+      // Raised as a safety net. The real fix for truncation is the hard
+      // sentence limits in the prompt (a long reply is a SLOW reply, so we
+      // want it short regardless), but this guarantees the hidden metadata
+      // block always has room to finish. A truncated metadata block means the
+      // JSON never closes, which means zero recommendation cards render.
+      max_tokens: 4096,
       stream: true,
       system: buildSystemBlocks(loreAddendum, previousRecommendations),
       messages,
@@ -249,6 +261,7 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
   let commentStartIdx = -1;
   let announcedRecsStarting = false;
   let stopReason = null;
+  const usage = { input: null, output: null, cacheRead: null, cacheWrite: null };
 
   function processDeltaText(deltaText) {
     fullText += deltaText;
@@ -300,8 +313,17 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
 
       if (payload.type === 'content_block_delta' && payload.delta?.type === 'text_delta') {
         processDeltaText(payload.delta.text);
-      } else if (payload.type === 'message_delta' && payload.delta?.stop_reason) {
-        stopReason = payload.delta.stop_reason;
+      } else if (payload.type === 'message_start' && payload.message?.usage) {
+        // Input-side usage, including how much came from cache. If
+        // cache_read_input_tokens is ~0 on every call, prompt caching is NOT
+        // working and that alone would explain a large latency regression.
+        usage.input = payload.message.usage.input_tokens ?? null;
+        usage.cacheRead = payload.message.usage.cache_read_input_tokens ?? null;
+        usage.cacheWrite = payload.message.usage.cache_creation_input_tokens ?? null;
+      } else if (payload.type === 'message_delta') {
+        if (payload.delta?.stop_reason) stopReason = payload.delta.stop_reason;
+        // Output-side usage. This is the number that actually drives latency.
+        if (payload.usage?.output_tokens != null) usage.output = payload.usage.output_tokens;
       } else if (payload.type === 'error') {
         console.error('Anthropic in-stream error event:', payload.error);
       }
@@ -313,16 +335,47 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
     emittedLength = fullText.length;
   }
 
+  // Always log usage, not only on truncation. This is the instrument that tells
+  // us whether a slow response was caused by long output, a cache miss, or
+  // something else — instead of inferring it from character counts, which do
+  // not map cleanly onto tokens (especially with kaomoji and CJK text).
+  console.log(
+    `[usage] output_tokens=${usage.output} input_tokens=${usage.input} ` +
+      `cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} ` +
+      `stop_reason=${stopReason} reply_chars=${fullText.length}`
+  );
+
   if (stopReason === 'max_tokens') {
-    // Carry enough context to actually identify WHICH reply hit the ceiling
-    // when scanning Vercel logs — length and a short prefix of the reply.
     console.warn(
-      `Groove reply truncated by max_tokens (length ${fullText.length}). ` +
+      `Groove reply TRUNCATED by max_tokens. output_tokens=${usage.output} ` +
+        `reply_chars=${fullText.length}. This means the hidden metadata block was ` +
+        `likely cut off, so no recommendation cards rendered. ` +
         `First 120 chars: ${JSON.stringify(fullText.slice(0, 120))}`
     );
   }
 
   return fullText;
+}
+
+// Fire-and-forget wrapper around logEvent.
+//
+// The Vercel logs showed Supabase writes failing with ECONNRESET and ETIMEDOUT.
+// Those are network problems reaching Supabase, not bugs in our logic, and they
+// are already non-fatal. But an un-awaited promise that hangs on a TCP timeout
+// can keep the serverless function alive and push it toward its maxDuration
+// ceiling, which turns a harmless logging blip into a user-visible timeout.
+//
+// This makes the intent explicit: analytics must NEVER delay or break a reply.
+// We swallow the failure loudly (so it still shows up in logs) and move on.
+function logEventSafe(sessionId, eventType, payload) {
+  if (!sessionId) return;
+  try {
+    Promise.resolve(logEvent(sessionId, eventType, payload)).catch((err) => {
+      console.error(`Non-fatal: failed to log ${eventType}:`, err?.message || err);
+    });
+  } catch (err) {
+    console.error(`Non-fatal: failed to log ${eventType}:`, err?.message || err);
+  }
 }
 
 export default async function handler(req, res) {
@@ -347,7 +400,7 @@ export default async function handler(req, res) {
   try {
     const lastUserMessage = messages[messages.length - 1];
     if (sessionId && lastUserMessage?.role === 'user') {
-      logEvent(sessionId, 'message_sent', {
+      logEventSafe(sessionId, 'message_sent', {
         role: 'user',
         content_length: lastUserMessage.content.length,
       });
@@ -404,7 +457,7 @@ export default async function handler(req, res) {
       );
 
       if (sessionId && dropped.length > 0) {
-        logEvent(sessionId, 'itunes_validation_failed', {
+        logEventSafe(sessionId, 'itunes_validation_failed', {
           failed_tracks: dropped.map((r) => ({ track: r.track, artist: r.artist })),
           failed_count: dropped.length,
           total_recs: recs.length,
@@ -427,13 +480,13 @@ export default async function handler(req, res) {
     }
 
     if (sessionId) {
-      logEvent(sessionId, 'message_sent', {
+      logEventSafe(sessionId, 'message_sent', {
         role: 'assistant',
         content_length: replyText.length,
       });
 
       if (enrichedRecs.length > 0) {
-        logEvent(sessionId, 'rec_generated', {
+        logEventSafe(sessionId, 'rec_generated', {
           recommendation_count: enrichedRecs.length,
           tracks: enrichedRecs.map((r) => `${r.track} - ${r.artist}`),
         });
