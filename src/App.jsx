@@ -354,33 +354,66 @@ export default function App() {
                     (!msg.recs || msg.recs.length === 0);
 
                   return (
-                    <div key={msg.id || i} className="chat-message">
-                      <strong>{msg.role === 'user' ? 'You' : 'Groove'}:</strong>
-                      <MessageContent content={msg.content} />
+                    <div
+                      key={msg.id || i}
+                      className={`chat-row ${msg.role === 'user' ? 'chat-row-user' : 'chat-row-groove'}`}
+                    >
+                      <div
+                        className={`chat-avatar ${msg.role === 'user' ? 'chat-avatar-user' : 'chat-avatar-groove'}`}
+                        aria-hidden="true"
+                      >
+                        {msg.role === 'user' ? (
+                          <svg viewBox="0 0 24 24" width="16" height="16">
+                            <circle cx="12" cy="8.5" r="3.8" fill="currentColor" />
+                            <path
+                              d="M4.5 20c0-3.8 3.4-6.2 7.5-6.2s7.5 2.4 7.5 6.2z"
+                              fill="currentColor"
+                            />
+                          </svg>
+                        ) : (
+                          // A record: Groove's whole world in one glyph.
+                          <svg viewBox="0 0 24 24" width="17" height="17">
+                            <circle cx="12" cy="12" r="10" fill="currentColor" opacity="0.9" />
+                            <circle cx="12" cy="12" r="6.2" fill="none" stroke="#16171d" strokeWidth="0.9" opacity="0.55" />
+                            <circle cx="12" cy="12" r="3.6" fill="#16171d" opacity="0.75" />
+                            <circle cx="12" cy="12" r="1.1" fill="currentColor" />
+                          </svg>
+                        )}
+                      </div>
 
-                      {showPreparing && (
-                        <p className="rec-preparing-line">Groove is pulling a few records...</p>
-                      )}
+                      {/* The bubble holds text only. Recommendation rows sit
+                          OUTSIDE it, at full width, because squeezing them into
+                          a chat bubble would undo the density we just gained by
+                          moving them from columns to rows. */}
+                      <div className="chat-content">
+                        <div className="chat-bubble">
+                          <MessageContent content={msg.content} />
+                        </div>
 
-                      {msg.role === 'assistant' && msg.recs && msg.recs.length > 0 && (
-                        <>
-                          <div className="rec-grid">
-                            {msg.recs.map((rec, j) => (
-                              <RecommendationCard
-                                key={`${msg.id || i}-${j}`}
-                                rec={rec}
-                                isPlaying={activePreviewKey === previewKeyFor(rec)}
-                                onTogglePlay={() => handleTogglePlay(rec)}
-                                onOutboundClick={handleOutboundClick}
-                              />
-                            ))}
-                          </div>
+                        {showPreparing && (
+                          <p className="rec-preparing-line">Groove is pulling a few records...</p>
+                        )}
 
-                          {msg.followUpQuestion && (
-                            <p className="rec-followup">{msg.followUpQuestion}</p>
-                          )}
-                        </>
-                      )}
+                        {msg.role === 'assistant' && msg.recs && msg.recs.length > 0 && (
+                          <>
+                            <div className="rec-rows">
+                              {msg.recs.map((rec, j) => (
+                                <RecommendationCard
+                                  key={`${msg.id || i}-${j}`}
+                                  rec={rec}
+                                  isPlaying={activePreviewKey === previewKeyFor(rec)}
+                                  onTogglePlay={() => handleTogglePlay(rec)}
+                                  onOutboundClick={handleOutboundClick}
+                                />
+                              ))}
+                            </div>
+
+                            {msg.followUpQuestion && (
+                              <p className="rec-followup">{msg.followUpQuestion}</p>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </div>
                   );
                 })}

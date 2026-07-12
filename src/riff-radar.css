@@ -89,22 +89,6 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   text-align: left;
 }
 
-/* --- Chat conversation --- */
-
-.chat-message {
-  max-width: 640px;
-  margin: 0 0 1.5rem 0;
-  color: #e8e8e8;
-}
-
-.chat-message p {
-  margin: 0.25rem 0;
-}
-
-.chat-message strong {
-  color: #ffffff;
-}
-
 /* --- Card container, shared by MomentForm.jsx and YouTubeMomentPicker.jsx --- */
 
 .moment-form-card {
@@ -283,130 +267,197 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   font-style: italic;
 }
 
-/* --- Recommendation grid --- */
+/* --- Chat: left/right aligned bubbles with avatars --- */
 
-.rec-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 12px;
-  max-width: 720px;
+.chat-row {
+  display: flex;
+  gap: 10px;
+  margin: 0 0 18px 0;
+  align-items: flex-start;
 }
 
-@media (max-width: 700px) {
-  .rec-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+/* Groove sits left. The user sits right, so the two speakers are instantly
+   distinguishable at a glance without reading the label. */
+.chat-row-groove {
+  flex-direction: row;
+  justify-content: flex-start;
 }
 
-/* --- Skeleton shown while cards are being validated/built --- */
-
-.rec-skeleton-wrap {
-  margin-top: 12px;
-  max-width: 720px;
+.chat-row-user {
+  flex-direction: row-reverse;
+  justify-content: flex-start;
 }
 
-.rec-skeleton-label {
-  font-size: 13px;
-  color: #999;
-  margin: 0 0 8px 0;
+.chat-avatar {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.chat-avatar-groove {
+  background: #2a2c36;
+  color: #d7d9e3;
+}
+
+.chat-avatar-user {
+  background: #33506b;
+  color: #dfe9f4;
+}
+
+/* min-width: 0 lets long words wrap instead of forcing the row wider. */
+.chat-content {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-row-user .chat-content {
+  align-items: flex-end;
+}
+
+.chat-row-groove .chat-content {
+  align-items: flex-start;
+}
+
+.chat-bubble {
+  border-radius: 14px;
+  padding: 10px 14px;
+  max-width: 640px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.chat-row-groove .chat-bubble {
+  background: #22242d;
+  color: #e8e8e8;
+  border-top-left-radius: 4px;
+}
+
+.chat-row-user .chat-bubble {
+  background: #33506b;
+  color: #f2f6fa;
+  border-top-right-radius: 4px;
+}
+
+.chat-bubble p {
+  margin: 0 0 0.6em 0;
+}
+
+.chat-bubble p:last-child {
+  margin-bottom: 0;
+}
+
+/* Groove's "pulling records" line and the recommendation rows live OUTSIDE the
+   bubble, so they get full width. Cramming them into a chat bubble would undo
+   the density gained by switching cards from columns to rows. */
+.rec-preparing-line {
+  margin: 10px 0 0 0;
+  font-size: 14px;
+  color: #9a9aa2;
   font-style: italic;
 }
 
-.rec-skeleton-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+/* --- Recommendations: horizontal rows, not columns --- */
+
+.rec-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  width: 100%;
+  max-width: 680px;
+}
+
+.rec-row {
+  display: flex;
+  align-items: center;
   gap: 12px;
-}
-
-@media (max-width: 700px) {
-  .rec-skeleton-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.rec-skeleton-card {
-  background: #f5f5f5;
-  border: 1px solid #e5e5e5;
-  border-radius: 12px;
-  padding: 12px;
-  height: 260px;
-  animation: rec-skeleton-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes rec-skeleton-pulse {
-  0%, 100% { opacity: 0.6; }
-  50% { opacity: 1; }
-}
-
-/* --- Individual card --- */
-
-.rec-card {
   background: #ffffff;
   border: 1px solid #e5e5e5;
   border-radius: 12px;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
+  padding: 10px 12px;
+  color: #1a1a1a;
+}
+
+.rec-row-art {
+  flex: 0 0 auto;
+}
+
+.rec-row-artwork {
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
+  object-fit: cover;
+  display: block;
+}
+
+.rec-row-artwork-empty {
+  background: #ececec;
+}
+
+/* min-width: 0 is what actually allows the text to shrink and ellipsize inside
+   a flex row. Without it the body refuses to shrink below its content width. */
+.rec-row-body {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
+.rec-row-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+  flex-wrap: wrap;
+}
+
 .rec-pill {
-  align-self: flex-start;
   background: #f0f0f0;
   color: #4a4a4a;
   font-size: 11px;
   font-weight: 500;
-  padding: 3px 8px;
+  padding: 2px 7px;
   border-radius: 6px;
-  margin-bottom: 8px;
+  white-space: nowrap;
 }
 
-.rec-artwork {
-  width: 80px;
-  height: 80px;
-  border-radius: 8px;
-  object-fit: cover;
-  margin-bottom: 8px;
+.rec-row-meta {
+  font-size: 11px;
+  color: #999;
 }
 
-.rec-title {
+.rec-row-title {
   font-size: 14px;
   font-weight: 600;
-  margin: 0 0 2px 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  margin: 0;
   color: #1a1a1a;
+  overflow-wrap: anywhere;
 }
 
-.rec-artist {
+.rec-row-artist {
   font-size: 13px;
-  color: #555;
-  margin: 0 0 2px 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: #666;
+  margin: 0 0 3px 0;
+  overflow-wrap: anywhere;
 }
 
-.rec-meta {
-  font-size: 12px;
-  color: #888;
-  margin: 0 0 8px 0;
-}
-
-.rec-explanation {
+.rec-row-explanation {
   font-size: 12px;
   color: #555;
-  line-height: 1.5;
-  margin: 0 0 4px 0;
+  line-height: 1.45;
+  margin: 0;
   display: -webkit-box;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
-.rec-explanation.expanded {
+.rec-row-explanation.expanded {
   display: block;
   -webkit-line-clamp: unset;
   overflow: visible;
@@ -416,10 +467,10 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   background: none;
   border: none;
   padding: 0;
+  margin-top: 2px;
   font-size: 12px;
   color: #4a90d9;
   cursor: pointer;
-  margin: 0 0 12px 0;
   display: block;
 }
 
@@ -427,45 +478,82 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   text-decoration: underline;
 }
 
-.rec-actions {
-  margin-top: auto;
-}
-
-.rec-play-button {
-  width: 100%;
-  margin-bottom: 8px;
-}
-
-.rec-links {
+/* Actions collapse from two stacked wrapped text buttons ("Apple / Music") into
+   three compact icon targets. */
+.rec-row-actions {
+  flex: 0 0 auto;
   display: flex;
-  gap: 8px;
-  align-items: stretch;
+  align-items: center;
+  gap: 6px;
 }
 
-.rec-link-button {
-  flex: 1;
+.rec-row-play {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid #d5d5d5;
+  background: #f7f7f7;
+  color: #1a1a1a;
   display: flex;
   align-items: center;
   justify-content: center;
-  text-align: center;
-  min-height: 44px;
-  font-size: 13px;
-  padding: 6px 8px;
-  border: 1px solid #ccc;
-  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.rec-row-play:hover {
+  background: #ebebeb;
+}
+
+.rec-row-links {
+  display: flex;
+  gap: 6px;
+}
+
+.rec-icon-link {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid #e5e5e5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-decoration: none;
-  color: #333;
+  background: #fff;
 }
 
-.rec-link-button:hover {
-  background: #f5f5f5;
+.rec-icon-link:hover {
+  background: #f2f2f2;
 }
-
-/* --- Follow-up question --- */
 
 .rec-followup {
   max-width: 640px;
-  margin: 16px 0 0 0;
+  margin: 12px 0 0 0;
   font-size: 15px;
   color: #e8e8e8;
+  line-height: 1.55;
+}
+
+/* --- Mobile --- */
+
+@media (max-width: 700px) {
+  .rec-rows {
+    max-width: 100%;
+  }
+
+  /* Stack the row: art + text on top, actions below. Keeping three icon
+     buttons in a horizontal row on a 360px screen would crush the title. */
+  .rec-row {
+    flex-wrap: wrap;
+  }
+
+  .rec-row-actions {
+    width: 100%;
+    justify-content: flex-start;
+    padding-left: 68px; /* line up under the text, past the artwork */
+  }
+
+  .chat-bubble {
+    max-width: 100%;
+  }
 }
