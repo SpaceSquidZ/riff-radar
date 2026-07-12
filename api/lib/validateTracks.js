@@ -255,6 +255,34 @@ export async function validateAndEnrichRecs(recs, languageHint) {
 const sourceFactsCache = new Map();
 const SOURCE_CACHE_MAX = 500;
 
+// Normalizes a track title for comparison. Strips the noise iTunes adds
+// (remaster tags, version suffixes, featured-artist parentheticals) and all
+// punctuation, so "Blue in Green (2023 Remaster)" still matches "Blue in Green".
+function normalizeTitle(name) {
+  return (name || '')
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')      // (Remastered), (feat. X), (Live)
+    .replace(/\[[^\]]*\]/g, ' ')     // [Explicit]
+    .replace(/\s-\s.*$/, ' ')        // " - 2011 Remaster"
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ') // punctuation, keeping any alphabet
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Do these two titles plausibly refer to the same song?
+// Deliberately lenient about decoration (remasters, live versions) but strict
+// about the actual words: this is the check that stops a typo'd title from
+// silently matching a DIFFERENT song by the same artist.
+function titlesMatch(itunesTitle, userTitle) {
+  const a = normalizeTitle(itunesTitle);
+  const b = normalizeTitle(userTitle);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  // One containing the other covers "Song" vs "Song (Extended Version)".
+  if (a.includes(b) || b.includes(a)) return true;
+  return false;
+}
+
 export async function lookupTrackFacts(track, artist, languageHint) {
   if (!track || !artist) return null;
 
@@ -267,34 +295,53 @@ export async function lookupTrackFacts(track, artist, languageHint) {
     stores.map(async (c) => ({ country: c, results: await searchStore(term, c) }))
   );
 
-  let best = null;
-  let foundIn = null;
+  // Two tiers, and the distinction matters a lot:
+  //
+  //   confirmed  — BOTH the artist and the title match. Safe to state as fact.
+  //   artist_only — the artist matches but no result's title does. This is the
+  //                 typo case: the user misspelled the song, and iTunes happily
+  //                 returned some OTHER song by that same artist. Previously we
+  //                 would have grabbed it and told Groove it was verified fact,
+  //                 anchoring every recommendation to a song the user never
+  //                 mentioned. Now we refuse to assert anything about the track.
+  let confirmed = null;
+  let confirmedIn = null;
+  let sawArtist = false;
+
   for (const { country, results } of storeResults) {
     if (!results) continue;
-    const match = results.find((r) => artistsMatch(r.artistName, artist));
-    if (match) {
-      // Prefer a match that carries a genre; otherwise take the first hit.
-      if (!best || (!best.primaryGenreName && match.primaryGenreName)) {
-        best = match;
-        foundIn = country;
+    for (const r of results) {
+      if (!artistsMatch(r.artistName, artist)) continue;
+      sawArtist = true;
+      if (!titlesMatch(r.trackName, track)) continue;
+      // Prefer a confirmed match that actually carries a genre.
+      if (!confirmed || (!confirmed.primaryGenreName && r.primaryGenreName)) {
+        confirmed = r;
+        confirmedIn = country;
       }
     }
   }
 
-  const facts = best
-    ? {
-        found: true,
-        trackName: best.trackName || track,
-        artistName: best.artistName || artist,
-        genre: best.primaryGenreName || null,
-        releaseYear: best.releaseDate ? best.releaseDate.slice(0, 4) : null,
-        albumName: best.collectionName || null,
-        storefront: foundIn,
-      }
-    : { found: false };
+  let facts;
+  if (confirmed) {
+    facts = {
+      found: true,
+      confidence: 'confirmed',
+      trackName: confirmed.trackName || track,
+      artistName: confirmed.artistName || artist,
+      genre: confirmed.primaryGenreName || null,
+      releaseYear: confirmed.releaseDate ? confirmed.releaseDate.slice(0, 4) : null,
+      albumName: confirmed.collectionName || null,
+      storefront: confirmedIn,
+    };
+  } else if (sawArtist) {
+    // The artist is real, the track isn't confirmable. Say exactly that, and
+    // nothing more. Do NOT hand back another song's metadata.
+    facts = { found: false, confidence: 'artist_only', artistName: artist };
+  } else {
+    facts = { found: false, confidence: 'not_found' };
+  }
 
-  // Naive size cap: clear the whole cache if it grows unbounded. This runs in a
-  // short-lived serverless container, so a simple bound is enough.
   if (sourceFactsCache.size >= SOURCE_CACHE_MAX) sourceFactsCache.clear();
   sourceFactsCache.set(cacheKey, facts);
 
