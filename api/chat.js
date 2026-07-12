@@ -478,10 +478,11 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
 //
 // This makes the intent explicit: analytics must NEVER delay or break a reply.
 // We swallow the failure loudly (so it still shows up in logs) and move on.
-function logEventSafe(sessionId, eventType, payload) {
+function logEventSafe(sessionId, eventType, payload, isTester = false) {
   if (!sessionId) return;
+  const withFlag = isTester ? { ...payload, is_tester: true } : payload;
   try {
-    Promise.resolve(logEvent(sessionId, eventType, payload)).catch((err) => {
+    Promise.resolve(logEvent(sessionId, eventType, withFlag)).catch((err) => {
       console.error(`Non-fatal: failed to log ${eventType}:`, err?.message || err);
     });
   } catch (err) {
@@ -494,7 +495,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { messages: rawMessages, sessionCount = 0, sessionId, previousRecommendations = [], languageHint: clientLanguageHint, sourceTrack } = req.body;
+  const { messages: rawMessages, sessionCount = 0, sessionId, previousRecommendations = [], languageHint: clientLanguageHint, sourceTrack, isTester = false } = req.body;
 
   if (!rawMessages || !Array.isArray(rawMessages)) {
     return res.status(400).json({ error: 'messages array is required' });
@@ -514,7 +515,7 @@ export default async function handler(req, res) {
       logEventSafe(sessionId, 'message_sent', {
         role: 'user',
         content_length: lastUserMessage.content.length,
-      });
+      }, isTester);
     }
 
     const loreAddendum = getLoreAddendum(sessionCount);
@@ -601,7 +602,7 @@ export default async function handler(req, res) {
           failed_tracks: dropped.map((r) => ({ track: r.track, artist: r.artist })),
           failed_count: dropped.length,
           total_recs: recs.length,
-        });
+        }, isTester);
       }
 
       // Last-resort fallback: if EVERY track failed validation, don't leave
@@ -623,13 +624,13 @@ export default async function handler(req, res) {
       logEventSafe(sessionId, 'message_sent', {
         role: 'assistant',
         content_length: replyText.length,
-      });
+      }, isTester);
 
       if (enrichedRecs.length > 0) {
         logEventSafe(sessionId, 'rec_generated', {
           recommendation_count: enrichedRecs.length,
           tracks: enrichedRecs.map((r) => `${r.track} - ${r.artist}`),
-        });
+        }, isTester);
       }
     }
 

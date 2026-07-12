@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 // A pool of example moments spanning genres, from iconic to indie.
 // One is picked at random each time the form loads, so the placeholder
@@ -30,7 +30,7 @@ function isValidTimestamp(value) {
   return single.test(trimmed) || range.test(trimmed);
 }
 
-export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, titleGuess }) {
+export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, titleGuess, onEvent }) {
   const [example] = useState(getRandomExample);
 
   const [song, setSong] = useState('');
@@ -41,6 +41,34 @@ export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, ti
 
   const [songIsGuess, setSongIsGuess] = useState(false);
   const [artistIsGuess, setArtistIsGuess] = useState(false);
+
+  // Field-level instrumentation.
+  //
+  // The funnel currently only shows whether someone reached moment_submitted.
+  // If they bail, we have no idea WHERE. That's the difference between knowing
+  // "the form is a problem" and knowing "people get through song and artist and
+  // then quit at 'what caught you'" — only the second one tells you what to fix.
+  //
+  // Each field fires ONCE, the first time it's filled in, so we can see how deep
+  // people get before dropping off. Fired on blur rather than on every keystroke
+  // to avoid flooding Supabase.
+  const fieldsLogged = useRef(new Set());
+
+  function logFieldFilled(fieldName, value) {
+    if (!onEvent) return;
+    if (!value.trim()) return;
+    if (fieldsLogged.current.has(fieldName)) return;
+    fieldsLogged.current.add(fieldName);
+    onEvent('form_field_completed', {
+      field: fieldName,
+      // Order matters for reading the drop-off funnel later.
+      field_order: ['song', 'artist', 'timestamp', 'whatCaughtYou'].indexOf(fieldName) + 1,
+      // Length only, never the content. We want to know if people write one word
+      // or three sentences in "what caught you", not to read what they wrote.
+      value_length: value.trim().length,
+      entered_via_youtube: fieldName === 'timestamp' ? !!youtubeTimestamp : undefined,
+    });
+  }
 
   // A timestamp marked in the YouTube player flows down as a prop. In that
   // path the timestamp is essentially FREE (you're already watching, you just
@@ -82,11 +110,21 @@ export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, ti
     // so that stays required.
     if (!song.trim() || !artist.trim() || !whatCaughtYou.trim()) {
       setError('Song, artist, and what caught you are needed to get started.');
+      // A user who hits a validation wall and gives up is invisible otherwise.
+      onEvent?.('form_validation_failed', {
+        reason: 'missing_required',
+        missing: [
+          !song.trim() && 'song',
+          !artist.trim() && 'artist',
+          !whatCaughtYou.trim() && 'whatCaughtYou',
+        ].filter(Boolean),
+      });
       return;
     }
     // Still validate the FORMAT if they did give us one.
     if (timestamp.trim() && !isValidTimestamp(timestamp)) {
       setError('Timestamp should be mm:ss (like 3:20) or a range (like 2:15-2:45).');
+      onEvent?.('form_validation_failed', { reason: 'bad_timestamp_format' });
       return;
     }
 
@@ -129,6 +167,7 @@ export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, ti
             setSong(e.target.value);
             setSongIsGuess(false);
           }}
+          onBlur={(e) => logFieldFilled('song', e.target.value)}
           placeholder={example.song}
         />
       </div>
@@ -148,6 +187,7 @@ export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, ti
             setArtist(e.target.value);
             setArtistIsGuess(false);
           }}
+          onBlur={(e) => logFieldFilled('artist', e.target.value)}
           placeholder={example.artist}
         />
       </div>
@@ -164,6 +204,7 @@ export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, ti
           type="text"
           value={timestamp}
           onChange={(e) => setTimestamp(e.target.value)}
+          onBlur={(e) => logFieldFilled('timestamp', e.target.value)}
           placeholder={example.timestamp}
         />
       </div>
@@ -179,6 +220,7 @@ export default function MomentForm({ onSubmit, youtubeTimestamp, videoLoaded, ti
           rows={4}
           value={whatCaughtYou}
           onChange={(e) => setWhatCaughtYou(e.target.value)}
+          onBlur={(e) => logFieldFilled('whatCaughtYou', e.target.value)}
           placeholder={example.whatCaughtYou}
         />
       </div>

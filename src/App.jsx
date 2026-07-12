@@ -7,6 +7,7 @@ import YouTubeMomentPicker from './YouTubeMomentPicker';
 import RecommendationCard from './RecommendationCard';
 import { getSessionId } from './sessionId';
 import { logEvent } from './supabaseClient';
+import { isTester } from './isTester';
 import './riff-radar.css';
 
 const LOADING_MESSAGES = [
@@ -58,6 +59,14 @@ export default function App() {
     };
   }, []);
 
+  // Every event goes through here so the tester flag is attached automatically.
+  // Relying on remembering to add it at each call site is how analytics data
+  // quietly rots.
+  function emit(eventType, payload = {}) {
+    const sessionId = getSessionId();
+    logEvent(sessionId, eventType, { ...payload, ...(isTester() ? { is_tester: true } : {}) });
+  }
+
   function previewKeyFor(rec) {
     return `${rec.track}::${rec.artist}`;
   }
@@ -80,14 +89,12 @@ export default function App() {
 
     if (!loggedPreviewKeysRef.current.has(key)) {
       loggedPreviewKeysRef.current.add(key);
-      const sessionId = getSessionId();
-      logEvent(sessionId, 'preview_played', { track: rec.track, artist: rec.artist });
+      emit('preview_played', { track: rec.track, artist: rec.artist });
     }
   }
 
   useEffect(() => {
-    const sessionId = getSessionId();
-    logEvent(sessionId, 'session_start');
+    emit('session_start');
   }, []);
 
   // Targets a SPECIFIC message by its stable id, rather than "whatever is
@@ -159,6 +166,7 @@ export default function App() {
           // Pass the override on the very first turn, because setSourceTrack
           // has not flushed to state yet at that point.
           sourceTrack: sourceTrackOverride || sourceTrack,
+          isTester: isTester(),
         }),
       });
 
@@ -250,6 +258,15 @@ export default function App() {
     // the formatted sentence and throwing the structured version away.
     const track = { track: moment.song, artist: moment.artist };
     setSourceTrack(track);
+
+    // THE key funnel conversion event: someone got all the way through the form.
+    // Everything before this is intent; this is the first real commitment.
+    emit('moment_submitted', {
+      has_timestamp: !!moment.timestamp,
+      what_caught_you_length: moment.whatCaughtYou?.length ?? 0,
+      used_youtube: !!videoLoaded,
+    });
+
     setMessages(newMessages);
     setPhase('chat');
     sendMessage(newMessages, track);
@@ -271,8 +288,7 @@ export default function App() {
   }
 
   function handleOutboundClick({ track, artist, service, url }) {
-    const sessionId = getSessionId();
-    logEvent(sessionId, 'outbound_click', { track, artist, service, url });
+    emit('outbound_click', { track, artist, service, url });
   }
 
   if (phase === 'landing') {
@@ -312,6 +328,7 @@ export default function App() {
                 youtubeTimestamp={youtubeTimestamp}
                 videoLoaded={videoLoaded}
                 titleGuess={titleGuess}
+                onEvent={emit}
               />
             )}
 
