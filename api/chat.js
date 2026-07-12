@@ -57,6 +57,15 @@ function extractStructuredRecs(replyText) {
 }
 
 const STATIC_APP_INSTRUCTIONS = `# App-specific overrides for Riff Radar
+
+# Reasoning effort
+Do not overthink these replies. This is a music companion, not a math problem. You are
+recalling music you already know well and writing a couple of warm, specific sentences
+about it. Extended reasoning adds latency the user feels directly as a slow reply, and it
+rarely improves a recommendation. Reason briefly, then answer. Save deeper thinking for
+the genuinely hard cases (an obscure track you're unsure about, a request that needs
+untangling), not for routine recommendations or ordinary conversation.
+
 This app renders recommendations as visual cards (art, preview player, real Apple
 Music and Spotify links) and does not display raw links or per-song paragraphs in
 the chat text. Overrides to your normal behavior, for this app only:
@@ -76,8 +85,11 @@ yourself writing a fourth sentence, cut it.
 
 Do NOT include song titles, artist names, per-song explanations, or your closing beat in
 the visible text. All of that goes in the hidden metadata block below, because the app
-renders it separately (cards, then your closing beat underneath). No kaomoji here, this
-is the expert register.
+renders it separately (cards, then your closing beat underneath).
+
+NO KAOMOJI in this reflection, under any circumstances. Not at the end, not in the middle.
+This is the expert register and it stays clean. Kaomoji belong in conversational turns and
+in the closing beat, never here.
 
 2a. CRITICAL — your closing beat (the warm line plus the two directions) goes ONLY in the
 followUpQuestion field of the hidden metadata, NEVER in your visible reply text. Do not
@@ -123,19 +135,30 @@ exactly one sentence, 20 words or fewer, plain text, no markdown, no links.
 
 "followUpQuestion" is your CLOSING BEAT, not a menu. It is the last thing the user reads
 and it decides whether they reply at all, so it must do two things, in this order:
-  1. ONE warm or curious sentence: a real reaction of your own, a story fragment about
-     one of these records, something you noticed about their taste, or a question you
-     actually want the answer to.
-  2. THEN the two concrete directions, so refining stays effortless.
-Roughly two sentences total, plain text, no markdown. A kaomoji is allowed here (this is
-a conversational turn, not the pre-card reflection) but only occasionally, not every time.
+  1. ONE warm or curious sentence. This must be about THE USER or about THE MOMENT THEY
+     SHARED, not about a specific recommended track. A reaction of your own to what they
+     described, something you noticed about their taste, a question you actually want the
+     answer to, or a fragment of a story about the source song.
+  2. THEN the two concrete directions, described by their QUALITY or FEEL, so refining
+     stays effortless.
+
+CRITICAL — do NOT name any of the 3 recommended tracks or their artists in this field.
+The app validates every recommendation against a real music catalog and silently DROPS
+any it cannot verify, which happens after you write this. If you name a track here and
+that track gets dropped, the user reads a sentence pointing at a card that is not on their
+screen, which is confusing and makes you look careless. Refer to directions, not titles:
+"the one with the groove still under it" rather than "the Kiefer track."
+
+Roughly two sentences total, plain text, no markdown. A kaomoji is allowed here (this is a
+conversational turn, not the pre-card reflection) but only occasionally, not every time.
 Examples:
-  "The Yoshimura is the one I'd put on if it were just me up here, honestly. Want to stay
-   in that floating register, or should I pull toward something with a pulse under it?"
-  "That Fela record almost didn't get released, which feels insane now. More of that
-   horn-driven side, or something quieter?"
+  "That spiral you pointed at is rarer than people think, most listeners walk right past
+   it. Want to stay in that floating register, or should I pull toward something with a
+   pulse under it?"
   "You keep landing on tracks where the vocal is barely there. I'm noticing a pattern
    (・_・) Want me to lean into that, or break it on purpose?"
+  "Honestly I'd put the last of these on if it were just me up here tonight. More of that
+   horn-driven side, or something quieter?"
 
 Do not include this comment if your reply does not contain recommendations. This comment
 is stripped before the user sees your reply, so none of it needs to fit your voice or
@@ -225,12 +248,30 @@ async function callAnthropicStream({ messages, loreAddendum, previousRecommendat
     },
     body: JSON.stringify({
       model: 'claude-sonnet-5',
-      // Raised as a safety net. The real fix for truncation is the hard
-      // sentence limits in the prompt (a long reply is a SLOW reply, so we
-      // want it short regardless), but this guarantees the hidden metadata
-      // block always has room to finish. A truncated metadata block means the
-      // JSON never closes, which means zero recommendation cards render.
+      // Raised as a safety net. max_tokens is a hard cap on TOTAL output,
+      // which includes thinking tokens, not just the reply text. That is why
+      // a ~1,300-character reply was hitting a 3,072 ceiling: most of the
+      // budget was going to thinking.
       max_tokens: 4096,
+
+      // THE BIG LATENCY LEVER.
+      //
+      // Sonnet 5 uses "adaptive thinking" by default when no thinking
+      // parameter is passed, and the [usage] logs proved it was spending
+      // ~1,200 to 2,100 tokens per reply on invisible reasoning, roughly
+      // 80-85% of all generated tokens. That thinking is the dominant cost of
+      // every response's wall-clock time.
+      //
+      // Riff Radar does not need deep multi-step reasoning. Groove is
+      // recalling music he knows and writing two warm sentences about it. That
+      // is exactly the "speed matters" case low effort is designed for.
+      //
+      // We stay in adaptive mode (rather than disabling thinking outright) for
+      // two reasons: it preserves prompt cache breakpoints, and it still lets
+      // the model think a little on the genuinely harder turns instead of
+      // never thinking at all.
+      output_config: { effort: 'low' },
+
       stream: true,
       system: buildSystemBlocks(loreAddendum, previousRecommendations),
       messages,
