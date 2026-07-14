@@ -482,7 +482,7 @@ function logEventSafe(sessionId, eventType, payload, isTester = false) {
   if (!sessionId) return;
   const withFlag = isTester ? { ...payload, is_tester: true } : payload;
   try {
-    Promise.resolve(logEvent(sessionId, eventType, withFlag)).catch((err) => {
+    Promise.resolve(logEvent(sessionId, eventType, withFlag, true)).catch((err) => {
       console.error(`Non-fatal: failed to log ${eventType}:`, err?.message || err);
     });
   } catch (err) {

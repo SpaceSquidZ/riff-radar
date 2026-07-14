@@ -1,41 +1,34 @@
 // src/supabaseClient.js
-//
-// Single shared Supabase client instance, plus a logEvent helper that
-// writes to the events table. Used from both frontend components
-// (session_start, outbound_click) and api/chat.js (message_sent,
-// rec_generated) — see each call site for which events it logs.
 
 import { createClient } from '@supabase/supabase-js';
 
-// Vite exposes browser-safe env vars via import.meta.env. Node (used by
-// api/chat.js on the server) does not have import.meta.env, so we check
-// for it first and only touch process.env in a way that's safe even when
-// `process` itself doesn't exist (true in the browser).
 const supabaseUrl =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) ||
   (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL);
 
-const supabaseKey =
+// PUBLIC key — safe for the browser. Used by the website.
+const supabaseAnonKey =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) ||
   (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY);
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-/**
- * Logs an event to the events table. Never throws — a logging failure
- * should never break the user's actual experience, so errors are
- * caught and logged to the console instead of propagating.
- *
- * @param {string} sessionId - from getSessionId() on the frontend, or
- *   passed through from the request body on the backend.
- * @param {string} eventType - 'session_start' | 'message_sent' |
- *   'rec_generated' | 'outbound_click'
- * @param {object} payload - event-specific details, see the table's
- *   SQL comments for the expected shape per event type.
- */
-export async function logEvent(sessionId, eventType, payload = {}) {
+// SECRET key — server only, never reaches the browser.
+// Note: NO "VITE_" prefix on purpose. That prefix is what makes Vite
+// leak a variable into the website, and this one must never leak.
+const supabaseServiceKey =
+  typeof process !== 'undefined' ? process.env?.SUPABASE_SERVICE_ROLE_KEY : undefined;
+
+export const supabaseAdmin = supabaseServiceKey
+  ? createClient(supabaseUrl, supabaseServiceKey)
+  : null;
+
+// Logs an event. Pass useAdmin = true from the server so it uses the
+// secret key (which still works after we lock the database).
+export async function logEvent(sessionId, eventType, payload = {}, useAdmin = false) {
+  const client = useAdmin && supabaseAdmin ? supabaseAdmin : supabase;
   try {
-    const { error } = await supabase
+    const { error } = await client
       .from('events')
       .insert({ session_id: sessionId, event_type: eventType, payload });
 
