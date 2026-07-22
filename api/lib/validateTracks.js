@@ -25,6 +25,22 @@
 //   'found_no_preview' — real, artist matches, no preview clip anywhere
 //   'not_found'        — no artist match in ANY searched store
 //   'unconfirmed'      — every iTunes request itself failed (network/5xx)
+//
+// CACHING (July 2026)
+// Both lookup paths now read through a Supabase-backed cache before hitting
+// iTunes, and write back on a miss. This is a prerequisite for D-023
+// (six candidates instead of three), which doubles call volume against an
+// undocumented, unofficially rate-limited API. See api/lib/itunesCache.js.
+// 'unconfirmed' results are deliberately NEVER cached — a network blip is
+// transient and must not poison a key for 30 days.
+
+import {
+  buildCacheKey,
+  cacheGet,
+  cacheSet,
+  rowToValidation,
+  rowToFacts,
+} from './itunesCache.js';
 
 const ITUNES_BASE = 'https://itunes.apple.com/search';
 
@@ -174,9 +190,16 @@ async function searchStore(term, country) {
 }
 
 export async function validateOneTrack(rec, languageHint) {
-  const term = `${rec.track} ${rec.artist}`;
   const stores = storesFor(rec, languageHint);
+  const cacheKey = buildCacheKey('rec', rec.track, rec.artist, stores);
 
+  const cached = await cacheGet(cacheKey);
+  if (cached) {
+    console.log(`[itunes_cache] HIT rec "${rec.track}" by ${rec.artist}`);
+    return rowToValidation(cached);
+  }
+
+  const term = `${rec.track} ${rec.artist}`;
   const storeResults = await Promise.all(stores.map((c) => searchStore(term, c)));
 
   let anyRequestSucceeded = false;
@@ -190,26 +213,37 @@ export async function validateOneTrack(rec, languageHint) {
     }
   }
 
+  // NEVER cache this. Every iTunes request failed, which is a transient
+  // network condition, not a fact about the track.
   if (!anyRequestSucceeded) {
     return { status: 'unconfirmed', enriched: null };
   }
 
   if (artistMatches.length === 0) {
+    cacheSet(cacheKey, { found: false, confidence: 'not_found' });
     return { status: 'not_found', enriched: null };
   }
 
   const withPreview = artistMatches.find((m) => m.previewUrl);
   const best = withPreview || artistMatches[0];
+  const status = withPreview ? 'found' : 'found_no_preview';
 
-  return {
-    status: withPreview ? 'found' : 'found_no_preview',
-    enriched: {
-      previewUrl: best.previewUrl || null,
-      artworkUrl: best.artworkUrl100 ? best.artworkUrl100.replace('100x100', '400x400') : null,
-      trackViewUrl: best.trackViewUrl || null,
-      releaseYear: best.releaseDate ? best.releaseDate.slice(0, 4) : null,
-    },
+  const enriched = {
+    previewUrl: best.previewUrl || null,
+    artworkUrl: best.artworkUrl100 ? best.artworkUrl100.replace('100x100', '400x400') : null,
+    trackViewUrl: best.trackViewUrl || null,
+    releaseYear: best.releaseDate ? best.releaseDate.slice(0, 4) : null,
   };
+
+  cacheSet(cacheKey, {
+    found: true,
+    confidence: status,
+    trackName: best.trackName || rec.track,
+    artistName: best.artistName || rec.artist,
+    ...enriched,
+  });
+
+  return { status, enriched };
 }
 
 // languageHint is optional — a coarse language code or name derived from the
@@ -247,9 +281,11 @@ export async function validateAndEnrichRecs(recs, languageHint) {
 // hard facts (real artist name as listed, genre, release year, storefront) so
 // the prompt can tell Groove what the song ACTUALLY is.
 //
-// Cached in-memory. Vercel reuses serverless containers between requests, so
-// follow-up turns in the same conversation usually hit this cache and pay no
-// lookup cost at all. Only the first turn of a conversation pays for it.
+// TWO CACHE LAYERS:
+//   L1 — the in-memory Map below. Free, instant, but only lives as long as one
+//        warm Vercel container. Good for follow-up turns in the same session.
+//   L2 — Supabase (itunesCache.js). Shared across every invocation and
+//        survives cold starts. This is the one that actually cuts iTunes load.
 // ---------------------------------------------------------------------------
 
 const sourceFactsCache = new Map();
@@ -286,11 +322,24 @@ function titlesMatch(itunesTitle, userTitle) {
 export async function lookupTrackFacts(track, artist, languageHint) {
   if (!track || !artist) return null;
 
-  const cacheKey = `${track.toLowerCase().trim()}::${artist.toLowerCase().trim()}::${languageHint || ''}`;
-  if (sourceFactsCache.has(cacheKey)) return sourceFactsCache.get(cacheKey);
+  const stores = storesFor({ track, artist }, languageHint);
+
+  // L1: in-memory, this container only.
+  const memKey = `${track.toLowerCase().trim()}::${artist.toLowerCase().trim()}::${languageHint || ''}`;
+  if (sourceFactsCache.has(memKey)) return sourceFactsCache.get(memKey);
+
+  // L2: Supabase, shared across all invocations.
+  const cacheKey = buildCacheKey('src', track, artist, stores);
+  const cached = await cacheGet(cacheKey);
+  if (cached) {
+    console.log(`[itunes_cache] HIT src "${track}" by ${artist}`);
+    const facts = rowToFacts(cached);
+    if (sourceFactsCache.size >= SOURCE_CACHE_MAX) sourceFactsCache.clear();
+    sourceFactsCache.set(memKey, facts);
+    return facts;
+  }
 
   const term = `${track} ${artist}`;
-  const stores = storesFor({ track, artist }, languageHint);
   const storeResults = await Promise.all(
     stores.map(async (c) => ({ country: c, results: await searchStore(term, c) }))
   );
@@ -307,9 +356,11 @@ export async function lookupTrackFacts(track, artist, languageHint) {
   let confirmed = null;
   let confirmedIn = null;
   let sawArtist = false;
+  let anyRequestSucceeded = false;
 
   for (const { country, results } of storeResults) {
     if (!results) continue;
+    anyRequestSucceeded = true;
     for (const r of results) {
       if (!artistsMatch(r.artistName, artist)) continue;
       sawArtist = true;
@@ -342,8 +393,14 @@ export async function lookupTrackFacts(track, artist, languageHint) {
     facts = { found: false, confidence: 'not_found' };
   }
 
+  // Only persist if iTunes actually answered. A total network failure looks
+  // identical to 'not_found' here, and caching that for a week would be wrong.
+  if (anyRequestSucceeded) {
+    cacheSet(cacheKey, facts);
+  }
+
   if (sourceFactsCache.size >= SOURCE_CACHE_MAX) sourceFactsCache.clear();
-  sourceFactsCache.set(cacheKey, facts);
+  sourceFactsCache.set(memKey, facts);
 
   return facts;
 }
