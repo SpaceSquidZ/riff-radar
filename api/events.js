@@ -17,6 +17,7 @@ import { supabaseAdmin } from '../src/supabaseClient.js';
 const ALLOWED_EVENTS = new Set([
   // --- currently in use ---
   'session_start',
+  'form_field_completed',
   'moment_submitted',
   'message_sent',
   'preview_played',
