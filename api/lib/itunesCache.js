@@ -26,6 +26,30 @@ import { supabaseAdmin } from '../../src/supabaseClient.js';
 const TTL_HIT_MS = 30 * 24 * 60 * 60 * 1000;
 const TTL_MISS_MS = 7 * 24 * 60 * 60 * 1000;
 
+// HARD BUDGET on every Supabase round-trip from this module.
+//
+// This module sits directly on the critical path of a reply. Supabase calls
+// from Vercel have been observed hanging on ECONNRESET / ETIMEDOUT rather than
+// failing fast, and a hung read here stalls recommendation validation until
+// the whole function hits its 60s maxDuration ceiling. That turns a harmless
+// cache miss into a total request failure.
+//
+// The cache is an OPTIMIZATION. It must never be load-bearing. If Supabase
+// does not answer within the budget, we abandon the cache and do the live
+// iTunes lookup, which is the exact behavior we had before caching existed.
+const CACHE_TIMEOUT_MS = 2000;
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      console.warn(`[itunes_cache] ${label} exceeded ${ms}ms, abandoning`);
+      resolve(null);
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function isFresh(row) {
   if (!row?.created_at) return false;
   const age = Date.now() - new Date(row.created_at).getTime();
@@ -57,12 +81,16 @@ export function buildCacheKey(kind, track, artist, stores) {
 export async function cacheGet(key) {
   if (!supabaseAdmin) return null;
   try {
-    const { data, error } = await supabaseAdmin
-      .from('itunes_cache')
-      .select('*')
-      .eq('cache_key', key)
-      .maybeSingle();
+    const result = await withTimeout(
+      supabaseAdmin.from('itunes_cache').select('*').eq('cache_key', key).maybeSingle(),
+      CACHE_TIMEOUT_MS,
+      'read'
+    );
 
+    // null means the timeout won the race. Treat as a miss.
+    if (!result) return null;
+
+    const { data, error } = result;
     if (error) {
       console.error('[itunes_cache] read failed:', error.message);
       return null;
@@ -85,11 +113,15 @@ export async function cacheGetMany(keys) {
   const out = new Map();
   if (!supabaseAdmin || keys.length === 0) return out;
   try {
-    const { data, error } = await supabaseAdmin
-      .from('itunes_cache')
-      .select('*')
-      .in('cache_key', keys);
+    const result = await withTimeout(
+      supabaseAdmin.from('itunes_cache').select('*').in('cache_key', keys),
+      CACHE_TIMEOUT_MS,
+      'batch read'
+    );
 
+    if (!result) return out;
+
+    const { data, error } = result;
     if (error) {
       console.error('[itunes_cache] batch read failed:', error.message);
       return out;
@@ -128,13 +160,21 @@ export function cacheSet(key, fields) {
   };
 
   try {
-    Promise.resolve(
-      supabaseAdmin.from('itunes_cache').upsert(row, { onConflict: 'cache_key' })
-    ).then(({ error }) => {
-      if (error) console.error('[itunes_cache] write failed:', error.message);
-    }).catch((err) => {
-      console.error('[itunes_cache] write threw:', err?.message || err);
-    });
+    // Bounded even though it is fire-and-forget. An unbounded floating promise
+    // on a hung TCP connection can keep the serverless container alive and
+    // push it toward maxDuration, which is the same failure logEventSafe
+    // exists to prevent in api/chat.js.
+    withTimeout(
+      supabaseAdmin.from('itunes_cache').upsert(row, { onConflict: 'cache_key' }),
+      CACHE_TIMEOUT_MS,
+      'write'
+    )
+      .then((result) => {
+        if (result?.error) console.error('[itunes_cache] write failed:', result.error.message);
+      })
+      .catch((err) => {
+        console.error('[itunes_cache] write threw:', err?.message || err);
+      });
   } catch (err) {
     console.error('[itunes_cache] write threw:', err?.message || err);
   }
