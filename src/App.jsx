@@ -6,6 +6,7 @@ import MessageContent from './MessageContent';
 import YouTubeMomentPicker from './YouTubeMomentPicker';
 import RecommendationCard from './RecommendationCard';
 import { getSessionId } from './sessionId';
+import { initSession, getSessionCount, getVisitorId } from './sessionCount';
 import { logEvent } from './supabaseClient';
 import { isTester } from './isTester';
 import './riff-radar.css';
@@ -94,7 +95,8 @@ export default function App() {
   }
 
   useEffect(() => {
-    emit('session_start');
+  const { visitorId, sessionCount, daysSinceLast } = initSession();
+  emit('session_start', { visitor_id: visitorId, session_count: sessionCount, days_since_last: daysSinceLast });
   }, []);
 
   // Targets a SPECIFIC message by its stable id, rather than "whatever is
@@ -160,7 +162,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: apiMessages,
-          sessionCount: 0,
+          sessionCount: getSessionCount(),
           sessionId,
           previousRecommendations,
           // Pass the override on the very first turn, because setSourceTrack

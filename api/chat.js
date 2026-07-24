@@ -520,6 +520,14 @@ export default async function handler(req, res) {
 
     const loreAddendum = getLoreAddendum(sessionCount);
 
+    if (sessionId && loreAddendum) {
+      const stageMatch = loreAddendum.match(/# Lore — Stage (\d+)/);
+      logEventSafe(sessionId, 'lore_stage_available', {
+        stage: stageMatch ? parseInt(stageMatch[1], 10) : null,
+        session_count: sessionCount,
+      }, isTester);
+    }
+
     // Ground Groove in what the user's song ACTUALLY is before generating.
     // This is the one lookup that has to happen before the Claude call (the
     // facts go into the system prompt), so it is serial. It is cached

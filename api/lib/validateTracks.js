@@ -128,16 +128,73 @@ function artistCandidates(name) {
   return [...new Set([...cands.map((c) => normalizeArtist(c)), normalizeArtist(raw)])].filter(Boolean);
 }
 
+// Normalized Levenshtein similarity, 0..1. Used as the fallback check when
+// neither exact nor a safe substring match applies.
+function levenshtein(a, b) {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const curr = [i];
+    for (let j = 1; j <= n; j++) {
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    prev = curr;
+  }
+  return prev[n];
+}
+
+function similarity(a, b) {
+  const longer = Math.max(a.length, b.length);
+  if (longer === 0) return 1;
+  return 1 - levenshtein(a, b) / longer;
+}
+
+// WRONG-MATCH GUARD (T1.4)
+//
+// The old rule was `na === nb || na.includes(nb) || nb.includes(na)`, which is
+// how Steven's ZAYN failure got through: iTunes returned "Zayn Keoh", and
+// "zayn keoh".includes("zayn") is true, so a completely different artist
+// passed validation and rendered as a real card. That is worse than a missing
+// recommendation — a validated-but-wrong track poisons trust in every correct
+// one, which is why the PRD treats wrong-match as a trust cliff with its own
+// 2% guardrail rather than folding it into hallucination rate.
+//
+// Substring matching is still needed for legitimate cases ("Beatles" vs "The
+// Beatles"), so it is kept but bounded: the shorter name must account for most
+// of the longer one. "beatles"/"the beatles" is 0.64 and passes.
+// "zayn"/"zayn keoh" is 0.44 and fails.
+const SUBSTRING_LENGTH_RATIO = 0.6;
+const FUZZY_SIMILARITY_FLOOR = 0.85;
+
 function oneArtistMatches(a, b) {
   const na = normalizeArtist(a);
   const nb = normalizeArtist(b);
   if (!na || !nb) return false;
-  return na === nb || na.includes(nb) || nb.includes(na);
+
+  if (na === nb) return true;
+
+  if (na.includes(nb) || nb.includes(na)) {
+    const shorter = Math.min(na.length, nb.length);
+    const longer = Math.max(na.length, nb.length);
+    return shorter / longer >= SUBSTRING_LENGTH_RATIO;
+  }
+
+  // Catches spelling and transliteration drift ("Amalia Rodrigues" vs
+  // "Amália Rodrigues", "Ali Farka Toure" vs "Ali Farka Touré") without
+  // opening the door to unrelated names.
+  return similarity(na, nb) >= FUZZY_SIMILARITY_FLOOR;
 }
 
 // True if ANY named artist in the recommendation matches ANY named artist in
 // the iTunes result — the dual-direction check that fixes collab crediting.
-function artistsMatch(itunesArtist, recArtist) {
+export function artistsMatch(itunesArtist, recArtist) {
   const recCands = artistCandidates(recArtist);
   const itunesCands = artistCandidates(itunesArtist);
   for (const rc of recCands) {
