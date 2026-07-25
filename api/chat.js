@@ -58,6 +58,7 @@ function extractStructuredData(replyText) {
     recs: [],
     followUpQuestion: '',
     arcBeatDelivered: false,
+    askOffered: false,
     askAnswered: false,
     cleanedReply: replyText,
   };
@@ -81,6 +82,7 @@ function extractStructuredData(replyText) {
     followUpQuestion:
       typeof parsed.followUpQuestion === 'string' ? parsed.followUpQuestion : '',
     arcBeatDelivered: parsed.arcBeatDelivered === true,
+    askOffered: parsed.askOffered === true,
     askAnswered: parsed.askAnswered === true,
     cleanedReply: replyText.replace(match[0], '').trimEnd(),
   };
@@ -138,10 +140,10 @@ EVERY response ends with exactly ONE metadata comment on its own line, after eve
 else. Which one depends on whether you gave recommendations.
 
 ## A. Turns WITH recommendations
-<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","region":"Country of origin","explanation":"One sentence, 20 words or fewer, on the musical link."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","region":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","region":"...","explanation":"..."}],"followUpQuestion":"Your closing beat.","arcBeatDelivered":false,"askAnswered":false}-->
+<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","region":"Country of origin","explanation":"One sentence, 20 words or fewer, on the musical link."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","region":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","region":"...","explanation":"..."}],"followUpQuestion":"Your closing beat.","arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
 
 ## B. Turns WITHOUT recommendations (pure conversation)
-<!--RIFF_RADAR_META:{"arcBeatDelivered":false,"askAnswered":false}-->
+<!--RIFF_RADAR_META:{"arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
 
 Field rules:
 
@@ -165,6 +167,17 @@ titles: "the one with the groove still under it" rather than "the Kiefer track."
 described under "Tonight, something of your own" in your context. If you decided the
 conversation had no room for it, set false. Do not set true unless the beat is genuinely
 present in your visible reply. A false positive means that beat is never shown again.
+
+"askOffered" — set true if and only if you actually asked the question under "Something
+you want from them" in your visible reply. Set false if there was no such question in your
+context, or if you decided the conversation had no room for it.
+
+Do NOT confuse this with your closing refinement question. A refinement question steers
+the recommendations ("want it looser, or more percussive?") and is not an ask. An ask is a
+question about the person's own life and circumstances, and it comes from your context
+verbatim in spirit. Only that counts.
+
+A false positive here permanently burns a question you never got to ask.
 
 "askAnswered" — set true if and only if the user's most recent message actually answered
 the question logged under "You asked something and have not been answered." Answering
@@ -308,45 +321,77 @@ async function streamClaudeReply({ messages, systemBlocks, res }) {
   let sseBuffer = '';
   let fullText = '';
   let emittedLength = 0;
-  let markerIdx = -1;
+  let markerStart = -1;
+  let markerEnd = -1;
   let markerResolved = false;
   let stopReason = null;
   const usage = { input: null, output: null, cacheRead: null, cacheWrite: null };
   const blockTypesSeen = new Set();
 
+  function flushRange(from, to) {
+    if (to <= from) return;
+    const safe = fullText.slice(from, to);
+    if (safe) res.write(JSON.stringify({ type: 'delta', text: safe }) + '\n');
+  }
+
+  // BUG THIS FIXES: the previous version assumed the metadata comment was the
+  // LAST thing in the reply. It found '<!--', flushed everything before it, and
+  // treated the entire remainder as metadata. When the model put the block
+  // first or mid-reply, every visible character after it was silently dropped,
+  // producing an assistant turn with no text at all.
+  //
+  // v2a made this much more likely, because a metadata block is now required on
+  // EVERY turn including pure conversation, so there is no longer a strong
+  // positional convention holding it at the end.
+  //
+  // This version tracks the marker's start AND its '-->' close, and emits text
+  // on both sides of it.
   function processDeltaText(deltaText) {
     fullText += deltaText;
 
-    if (markerIdx === -1) {
-      markerIdx = fullText.indexOf(MARKER_PREFIX);
+    if (markerStart === -1) {
+      markerStart = fullText.indexOf(MARKER_PREFIX);
     }
 
-    if (markerIdx !== -1) {
-      // Flush everything before the marker, once.
-      if (emittedLength < markerIdx) {
-        const safe = fullText.slice(emittedLength, markerIdx);
-        if (safe) res.write(JSON.stringify({ type: 'delta', text: safe }) + '\n');
-        emittedLength = markerIdx;
-      }
-
-      // Decide which marker this is, as soon as enough characters exist.
-      // Only the RECS marker means cards are coming; META is a quiet
-      // conversational turn and must not trigger the loading state.
-      if (!markerResolved && fullText.length >= markerIdx + RECS_MARKER.length) {
-        markerResolved = true;
-        const candidate = fullText.slice(markerIdx, markerIdx + RECS_MARKER.length);
-        if (candidate === RECS_MARKER) {
-          res.write(JSON.stringify({ type: 'recs_starting' }) + '\n');
-        }
+    // No marker seen yet. Emit with a holdback so a partial '<!-' never ships.
+    if (markerStart === -1) {
+      const safeEnd = Math.max(0, fullText.length - HOLDBACK_CHARS);
+      if (safeEnd > emittedLength) {
+        flushRange(emittedLength, safeEnd);
+        emittedLength = safeEnd;
       }
       return;
     }
 
-    const safeEnd = Math.max(0, fullText.length - HOLDBACK_CHARS);
-    if (safeEnd > emittedLength) {
-      const safe = fullText.slice(emittedLength, safeEnd);
-      if (safe) res.write(JSON.stringify({ type: 'delta', text: safe }) + '\n');
-      emittedLength = safeEnd;
+    // Everything before the marker is real text. Flush it once.
+    if (emittedLength < markerStart) {
+      flushRange(emittedLength, markerStart);
+      emittedLength = markerStart;
+    }
+
+    // Only the RECS marker means cards are coming. META is a quiet
+    // conversational turn and must not trigger the loading state.
+    if (!markerResolved && fullText.length >= markerStart + RECS_MARKER.length) {
+      markerResolved = true;
+      const candidate = fullText.slice(markerStart, markerStart + RECS_MARKER.length);
+      if (candidate === RECS_MARKER) {
+        res.write(JSON.stringify({ type: 'recs_starting' }) + '\n');
+      }
+    }
+
+    if (markerEnd === -1) {
+      const closeIdx = fullText.indexOf('-->', markerStart);
+      if (closeIdx !== -1) markerEnd = closeIdx + 3;
+    }
+
+    // Marker has closed. Skip past it and resume emitting anything after.
+    if (markerEnd !== -1) {
+      if (emittedLength < markerEnd) emittedLength = markerEnd;
+      const safeEnd = Math.max(markerEnd, fullText.length - HOLDBACK_CHARS);
+      if (safeEnd > emittedLength) {
+        flushRange(emittedLength, safeEnd);
+        emittedLength = safeEnd;
+      }
     }
   }
 
@@ -389,8 +434,13 @@ async function streamClaudeReply({ messages, systemBlocks, res }) {
     }
   }
 
-  if (markerIdx === -1 && emittedLength < fullText.length) {
-    res.write(JSON.stringify({ type: 'delta', text: fullText.slice(emittedLength) }) + '\n');
+  // Final flush. Emit whatever is left that is not inside the marker.
+  if (emittedLength < fullText.length) {
+    const noMarker = markerStart === -1;
+    const pastMarker = markerEnd !== -1 && emittedLength >= markerEnd;
+    if (noMarker || pastMarker) {
+      flushRange(emittedLength, fullText.length);
+    }
     emittedLength = fullText.length;
   }
 
@@ -536,6 +586,7 @@ export default async function handler(req, res) {
       recs,
       followUpQuestion,
       arcBeatDelivered,
+      askOffered,
       askAnswered,
       cleanedReply,
     } = extractStructuredData(rawReplyText);
@@ -622,7 +673,7 @@ export default async function handler(req, res) {
         );
       }
 
-      if (offeredAsk) {
+      if (askOffered && offeredAsk) {
         logEventSafe(
           sessionId,
           'daily_ask_offered',
@@ -641,15 +692,17 @@ export default async function handler(req, res) {
       }
     }
 
-    // The client persists progress from these fields. Sending the ids back
-    // rather than having the client recompute them keeps one source of truth.
+    // The client persists progress from these fields. An ask id is only sent
+    // when Groove CONFIRMS he asked it, not merely because the server put it in
+    // his context. Reporting it on offer alone burned six asks across two test
+    // conversations in which none were actually asked.
     res.write(
       JSON.stringify({
         type: 'done',
         followUpQuestion,
         arcBeatId: arcBeatDelivered && offeredArcBeat ? offeredArcBeat.id : null,
-        askOfferedId: offeredAsk ? offeredAsk.id : null,
-        askOfferedText: offeredAsk ? offeredAsk.text : null,
+        askOfferedId: askOffered && offeredAsk ? offeredAsk.id : null,
+        askOfferedText: askOffered && offeredAsk ? offeredAsk.text : null,
         askAnsweredId: askAnswered && pendingAskId ? pendingAskId : null,
       }) + '\n'
     );

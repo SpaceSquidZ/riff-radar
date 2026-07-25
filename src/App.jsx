@@ -356,7 +356,19 @@ export default function App() {
             {phase === 'chat' && (
               <div>
                 {messages.map((msg, i) => {
-                  if (msg.role === 'assistant' && !msg.content) return null;
+                  // Hide an assistant turn only when it carries NOTHING at all.
+                  //
+                  // This used to be `!msg.content`, which meant a turn whose
+                  // text failed to arrive took its recommendation cards down
+                  // with it: the user saw an empty gap rather than the cards
+                  // that had already loaded. Text is the usual reason to
+                  // render, but not the only one.
+                  const hasNothing =
+                    !msg.content &&
+                    !(msg.recs && msg.recs.length > 0) &&
+                    !msg.followUpQuestion &&
+                    !msg.buildingRecs;
+                  if (msg.role === 'assistant' && hasNothing) return null;
 
                   const showPreparing =
                     msg.role === 'assistant' &&
@@ -391,9 +403,11 @@ export default function App() {
                       </div>
 
                       <div className="chat-content">
-                        <div className="chat-bubble">
-                          <MessageContent content={msg.content} />
-                        </div>
+                        {msg.content && (
+                          <div className="chat-bubble">
+                            <MessageContent content={msg.content} />
+                          </div>
+                        )}
 
                         {showPreparing && (
                           <p className="rec-preparing-line">Groove is pulling a few records...</p>
