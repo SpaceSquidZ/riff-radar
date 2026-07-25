@@ -27,6 +27,48 @@ export const supabaseAdmin = supabaseServiceKey
 const isBrowser = typeof window !== 'undefined';
 
 /**
+ * Inserts one event row, retrying once on a TRANSPORT failure.
+ *
+ * WHY THE RETRY EXISTS
+ * Production logs showed events being lost with:
+ *   TypeError: fetch failed
+ *   Caused by: SocketError: other side closed (UND_ERR_SOCKET)
+ *
+ * That is not latency and not a bad query. A warm serverless container holds an
+ * idle keep-alive connection; Supabase closes it from its side; the next write
+ * wakes up into a dead socket and fails instantly. Matching the function region
+ * to the database region narrows the window but does not close it, because the
+ * cause is connection age, not distance.
+ *
+ * A single retry gets a fresh connection and succeeds. Losing message_sent and
+ * rec_generated rows silently is worse than a duplicate attempt, because the
+ * funnel is the artifact and dropped rows cannot be reconstructed later.
+ *
+ * A PostgREST error object (bad column, RLS rejection) is NOT retried, since
+ * retrying a rejected query just fails again.
+ */
+async function insertEventWithRetry(client, row, attempts = 2) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const { error } = await client.from('events').insert(row);
+      if (!error) return;
+      console.error('Failed to log event:', row.event_type, error.message);
+      return; // real rejection, not transport. Do not retry.
+    } catch (err) {
+      if (i === attempts - 1) {
+        console.error(
+          'Failed to log event after retry:',
+          row.event_type,
+          err?.message || err
+        );
+        return;
+      }
+      // Fall through and try once more on a fresh connection.
+    }
+  }
+}
+
+/**
  * Logs an event.
  *
  * D-008: the browser no longer writes to Supabase directly. It POSTs to
@@ -45,16 +87,13 @@ const isBrowser = typeof window !== 'undefined';
  * @param {boolean} useAdmin - true from server code, false/omitted from the browser
  */
 export async function logEvent(sessionId, eventType, payload = {}, useAdmin = false) {
-  // --- Server path: unchanged, writes directly with the service key ---
+  // --- Server path: direct write with the service key, with one retry ---
   if (useAdmin && supabaseAdmin) {
-    try {
-      const { error } = await supabaseAdmin
-        .from('events')
-        .insert({ session_id: sessionId, event_type: eventType, payload });
-      if (error) console.error('Failed to log event:', eventType, error);
-    } catch (err) {
-      console.error('Error logging event:', eventType, err);
-    }
+    await insertEventWithRetry(supabaseAdmin, {
+      session_id: sessionId,
+      event_type: eventType,
+      payload,
+    });
     return;
   }
 
@@ -92,13 +131,10 @@ export async function logEvent(sessionId, eventType, payload = {}, useAdmin = fa
 
   // --- Server code that forgot useAdmin: fall back rather than silently drop ---
   if (supabaseAdmin) {
-    try {
-      const { error } = await supabaseAdmin
-        .from('events')
-        .insert({ session_id: sessionId, event_type: eventType, payload });
-      if (error) console.error('Failed to log event:', eventType, error);
-    } catch (err) {
-      console.error('Error logging event:', eventType, err);
-    }
+    await insertEventWithRetry(supabaseAdmin, {
+      session_id: sessionId,
+      event_type: eventType,
+      payload,
+    });
   }
 }
