@@ -6,7 +6,21 @@ import MessageContent from './MessageContent';
 import YouTubeMomentPicker from './YouTubeMomentPicker';
 import RecommendationCard from './RecommendationCard';
 import { getSessionId } from './sessionId';
-import { initSession, getSessionCount, getVisitorId } from './sessionCount';
+import {
+  initSession,
+  getDaysSeen,
+  getVisitorId,
+  getDaysSinceLast,
+} from './sessionCount';
+import {
+  getProgressContext,
+  markArcBeatDelivered,
+  markAskOffered,
+  markAskAnswered,
+  setPendingAsk,
+  clearPendingAsk,
+  agePendingAsk,
+} from './loreProgress';
 import { logEvent } from './supabaseClient';
 import { isTester } from './isTester';
 import './riff-radar.css';
@@ -30,20 +44,12 @@ export default function App() {
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [youtubeTimestamp, setYoutubeTimestamp] = useState('');
   const [titleGuess, setTitleGuess] = useState(null);
-  // The song the user actually bookmarked. Sent on EVERY turn so the server can
-  // look up its real genre/year/artist and ground Groove in what the track
-  // actually is, instead of letting it guess from a title that may collide with
-  // a famous song of the same name.
   const [sourceTrack, setSourceTrack] = useState(null);
 
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
-  // True from the moment a send starts until its stream fully finishes.
-  // Used to disable the input/send button, so the user can't start a second
-  // stream while one is still writing — the situation that produced empty
-  // Groove bubbles with their text fused into a later turn.
   const [isStreaming, setIsStreaming] = useState(false);
 
   const audioElRef = useRef(null);
@@ -60,12 +66,16 @@ export default function App() {
     };
   }, []);
 
-  // Every event goes through here so the tester flag is attached automatically.
-  // Relying on remembering to add it at each call site is how analytics data
-  // quietly rots.
+  // Every event goes through here so the tester flag and visitor id are attached
+  // automatically. visitor_id on EVERY event is what lets any session
+  // definition be computed retroactively from created_at later.
   function emit(eventType, payload = {}) {
     const sessionId = getSessionId();
-    logEvent(sessionId, eventType, { ...payload, ...(isTester() ? { is_tester: true } : {}) });
+    logEvent(sessionId, eventType, {
+      ...payload,
+      visitor_id: getVisitorId(),
+      ...(isTester() ? { is_tester: true } : {}),
+    });
   }
 
   function previewKeyFor(rec) {
@@ -95,22 +105,15 @@ export default function App() {
   }
 
   useEffect(() => {
-  const { visitorId, sessionCount, daysSinceLast } = initSession();
-  emit('session_start', { visitor_id: visitorId, session_count: sessionCount, days_since_last: daysSinceLast });
+    const { daysSeen, daysSinceLast, isNewDay, isReturning } = initSession();
+    emit('session_start', {
+      days_seen: daysSeen,
+      days_since_last: daysSinceLast,
+      is_new_day: isNewDay,
+      is_returning: isReturning,
+    });
   }, []);
 
-  // Targets a SPECIFIC message by its stable id, rather than "whatever is
-  // last in the array right now".
-  //
-  // The old updateLastMessage() wrote to messages[length - 1], which was the
-  // root cause of the empty-Groove-bubble bug: if the user sent a new message
-  // while a stream was still in flight, "last" became the NEW assistant slot,
-  // so the in-flight stream's remaining text (and its 'done' event, which
-  // clears buildingRecs) landed in the wrong bubble. The original bubble
-  // stayed empty and its "pulling a few records..." line never cleared.
-  //
-  // Keying on an id makes that structurally impossible: each stream only ever
-  // writes to the message it created, no matter what else is added meanwhile.
   function updateMessageById(id, updater) {
     setMessages((prev) => prev.map((m) => (m.id === id ? updater(m) : m)));
   }
@@ -137,9 +140,6 @@ export default function App() {
     setLoadingMessage(getRandomLoadingMessage());
 
     const previousRecommendations = collectPreviousRecommendations(newMessages);
-
-    // Every assistant message gets a stable id at creation. This stream will
-    // ONLY ever write to this id — see updateMessageById above.
     const assistantId = `a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     setMessages([
@@ -157,18 +157,22 @@ export default function App() {
     try {
       const sessionId = getSessionId();
       const apiMessages = newMessages.map(({ role, content }) => ({ role, content }));
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: apiMessages,
-          sessionCount: getSessionCount(),
           sessionId,
           previousRecommendations,
-          // Pass the override on the very first turn, because setSourceTrack
-          // has not flushed to state yet at that point.
           sourceTrack: sourceTrackOverride || sourceTrack,
           isTester: isTester(),
+
+          // v2a progress context. daysSeen replaces sessionCount: gating is
+          // distinct days now, per D-019.
+          daysSeen: getDaysSeen(),
+          daysSinceLast: getDaysSinceLast(),
+          ...getProgressContext(),
         }),
       });
 
@@ -212,20 +216,41 @@ export default function App() {
           } else if (event.type === 'recs_starting') {
             updateMessageById(assistantId, (msg) => ({ ...msg, buildingRecs: true }));
           } else if (event.type === 'rec_ready') {
-            // Progressive reveal: each card arrives on its own as its iTunes
-            // lookup resolves. Append it so the grid grows 0 -> 1 -> 2 -> 3.
             updateMessageById(assistantId, (msg) => ({
               ...msg,
               recs: [...(msg.recs || []), event.rec],
             }));
           } else if (event.type === 'done') {
-            // recs already arrived via rec_ready; done just carries the
-            // closing question and clears the "preparing" state.
             updateMessageById(assistantId, (msg) => ({
               ...msg,
               followUpQuestion: event.followUpQuestion || '',
               buildingRecs: false,
             }));
+
+            // --- persist lore/arc/ask progress ---------------------------
+            //
+            // The server reports what it offered and what Groove said he
+            // actually delivered. Marking an arc beat delivered is permanent,
+            // so it only happens when Groove confirms the beat is present in
+            // his visible reply. A false positive burns that beat forever.
+
+            if (event.arcBeatId) {
+              markArcBeatDelivered(event.arcBeatId);
+              emit('arc_beat_delivered', { beat_id: event.arcBeatId });
+            }
+
+            if (event.askAnsweredId) {
+              markAskAnswered(event.askAnsweredId);
+              clearPendingAsk();
+            } else {
+              // Not answered this turn. Age it so it drops after one follow-up.
+              agePendingAsk();
+            }
+
+            if (event.askOfferedId) {
+              markAskOffered(event.askOfferedId);
+              setPendingAsk(event.askOfferedId, event.askOfferedText);
+            }
           } else if (event.type === 'error') {
             updateMessageById(assistantId, (msg) => ({
               ...msg,
@@ -256,13 +281,9 @@ export default function App() {
     const newMessages = [
       { id: `u-${Date.now()}`, role: 'user', content: moment.formattedMessage },
     ];
-    // MomentForm already collects these as separate fields; we were only using
-    // the formatted sentence and throwing the structured version away.
     const track = { track: moment.song, artist: moment.artist };
     setSourceTrack(track);
 
-    // THE key funnel conversion event: someone got all the way through the form.
-    // Everything before this is intent; this is the first real commitment.
     emit('moment_submitted', {
       has_timestamp: !!moment.timestamp,
       what_caught_you_length: moment.whatCaughtYou?.length ?? 0,
@@ -276,9 +297,6 @@ export default function App() {
 
   function handleSend() {
     if (!input.trim()) return;
-    // Hard guard: never start a second stream while one is still running.
-    // The UI also disables the button, but this covers Enter-key presses and
-    // any other path into handleSend.
     if (isStreaming) return;
     const newMessages = [
       ...messages,
@@ -337,19 +355,8 @@ export default function App() {
             {phase === 'chat' && (
               <div>
                 {messages.map((msg, i) => {
-                  // Never render an assistant bubble with no content. This
-                  // covers both the normal "waiting for the first token" case
-                  // AND any bubble left empty by an interrupted stream —
-                  // previously this only checked the LAST message, so an empty
-                  // bubble stranded mid-conversation still rendered as a bare
-                  // "Groove:" with nothing under it.
                   if (msg.role === 'assistant' && !msg.content) return null;
 
-                  // Show the "preparing" line only while recs are coming AND
-                  // none have arrived yet. Once the first rec_ready lands,
-                  // the growing card grid replaces it. A plain text line
-                  // (vs. 3 skeleton cards) can never look like it "dwindled"
-                  // to 2, because it never promised a count.
                   const showPreparing =
                     msg.role === 'assistant' &&
                     msg.buildingRecs &&
@@ -373,7 +380,6 @@ export default function App() {
                             />
                           </svg>
                         ) : (
-                          // A record: Groove's whole world in one glyph.
                           <svg viewBox="0 0 24 24" width="17" height="17">
                             <circle cx="12" cy="12" r="10" fill="currentColor" opacity="0.9" />
                             <circle cx="12" cy="12" r="6.2" fill="none" stroke="#16171d" strokeWidth="0.9" opacity="0.55" />
@@ -383,10 +389,6 @@ export default function App() {
                         )}
                       </div>
 
-                      {/* The bubble holds text only. Recommendation rows sit
-                          OUTSIDE it, at full width, because squeezing them into
-                          a chat bubble would undo the density we just gained by
-                          moving them from columns to rows. */}
                       <div className="chat-content">
                         <div className="chat-bubble">
                           <MessageContent content={msg.content} />
@@ -421,12 +423,6 @@ export default function App() {
                 })}
                 {loading && <p style={{ opacity: 0.6 }}>{loadingMessage}</p>}
 
-                {/* Input and Send are disabled while a reply is streaming —
-                    same pattern as ChatGPT/Claude. This is the UX half of the
-                    empty-bubble fix: it prevents the user from starting a
-                    second stream mid-reply. (updateMessageById is the
-                    correctness half — it makes cross-turn writes impossible
-                    even if a second stream somehow started.) */}
                 <div style={{ marginTop: '1.5rem', display: 'flex', gap: '8px', maxWidth: '640px' }}>
                   <input
                     type="text"

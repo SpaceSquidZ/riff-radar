@@ -8,51 +8,81 @@
 // Response protocol (newline-delimited JSON, one object per line):
 //   {"type":"delta","text":"..."}              — a chunk of Groove's visible reply
 //   {"type":"recs_starting"}                    — server began the hidden rec
-//                                                 metadata; recs ARE coming (the
-//                                                 "Groove is preparing" cue)
-//   {"type":"rec_ready","rec":{...}}            — one validated card, emitted the
-//                                                 moment its own iTunes lookup
-//                                                 resolves (progressive reveal)
-//   {"type":"done","followUpQuestion":"..."}   — stream finished
+//                                                 metadata; recs ARE coming
+//   {"type":"rec_ready","rec":{...}}            — one validated card
+//   {"type":"done", ...}                        — stream finished, carries
+//                                                 followUpQuestion plus the
+//                                                 progress fields the client
+//                                                 needs to persist
 //   {"type":"error","message":"..."}            — something went wrong mid-stream
 //
-// Logs three event types to Supabase:
-//   message_sent, rec_generated, itunes_validation_failed
+// ===========================================================================
+// v2a CHANGES (July 2026)
+//
+// TWO METADATA MARKERS instead of one:
+//   <!--RIFF_RADAR_RECS:{...}-->  turns that include recommendations
+//   <!--RIFF_RADAR_META:{...}-->  conversational turns, no recommendations
+//
+// Both are stripped before the user sees the reply. Only RECS triggers the
+// "Groove is pulling a few records" state.
+//
+// Why two: askAnswered and arcBeatDelivered have to be reportable on EVERY
+// turn, and the old single marker only appeared when recommendations did. A
+// conversational turn had no channel to report on.
+//
+// Gating is now DISTINCT DAYS (daysSeen), not sessionCount. See
+// src/sessionCount.js for why.
+// ===========================================================================
 
-import { GROOVE_BASE_PROMPT, getLoreAddendum } from '../src/groovePrompt.js';
+import {
+  GROOVE_BASE_PROMPT,
+  getLoreAddendum,
+  getActiveStage,
+  getPendingArcBeat,
+  getNextAsk,
+} from '../src/groovePrompt.js';
 import { logEvent } from '../src/supabaseClient.js';
 import { validateOneTrack, lookupTrackFacts } from './lib/validateTracks.js';
 
-// Vercel kills a serverless function outright once it exceeds its max
-// execution duration — no error event, no graceful close, the connection
-// just drops. That would look exactly like a reply that silently stops
-// mid-stream with no error message. 60s is the max allowed on Vercel's
-// Hobby tier; raising it here gives real headroom for a slow upstream
-// call instead of leaving the default (much shorter) limit as an
-// invisible ceiling.
 export const config = {
   maxDuration: 60,
 };
 
-const RECS_MARKER_START = '<!--';
+const MARKER_PREFIX = '<!--';
+const RECS_MARKER = '<!--RIFF_RADAR_RECS:';
+const META_MARKER = '<!--RIFF_RADAR_META:';
 const HOLDBACK_CHARS = 24;
 
-function extractStructuredRecs(replyText) {
-  const match = replyText.match(/<!--RIFF_RADAR_RECS:(\{.*?\})-->/s);
-  if (!match) return { recs: [], followUpQuestion: '', cleanedReply: replyText };
+function extractStructuredData(replyText) {
+  const empty = {
+    recs: [],
+    followUpQuestion: '',
+    arcBeatDelivered: false,
+    askAnswered: false,
+    cleanedReply: replyText,
+  };
+
+  const match =
+    replyText.match(/<!--RIFF_RADAR_RECS:(\{.*?\})-->/s) ||
+    replyText.match(/<!--RIFF_RADAR_META:(\{.*?\})-->/s);
+
+  if (!match) return empty;
 
   let parsed = {};
   try {
     parsed = JSON.parse(match[1]);
   } catch (err) {
-    console.error('Failed to parse RIFF_RADAR_RECS block:', err, match[1]);
+    console.error('Failed to parse metadata block:', err, match[1]);
+    return { ...empty, cleanedReply: replyText.replace(match[0], '').trimEnd() };
   }
 
-  const cleanedReply = replyText.replace(match[0], '').trimEnd();
   return {
     recs: Array.isArray(parsed.recs) ? parsed.recs : [],
-    followUpQuestion: typeof parsed.followUpQuestion === 'string' ? parsed.followUpQuestion : '',
-    cleanedReply,
+    followUpQuestion:
+      typeof parsed.followUpQuestion === 'string' ? parsed.followUpQuestion : '',
+    arcBeatDelivered: parsed.arcBeatDelivered === true,
+    askAnswered: parsed.askAnswered === true,
+    cleanedReply: replyText.replace(match[0], '').trimEnd(),
   };
 }
 
@@ -62,9 +92,7 @@ const STATIC_APP_INSTRUCTIONS = `# App-specific overrides for Riff Radar
 Do not overthink these replies. This is a music companion, not a math problem. You are
 recalling music you already know well and writing a couple of warm, specific sentences
 about it. Extended reasoning adds latency the user feels directly as a slow reply, and it
-rarely improves a recommendation. Reason briefly, then answer. Save deeper thinking for
-the genuinely hard cases (an obscure track you're unsure about, a request that needs
-untangling), not for routine recommendations or ordinary conversation.
+rarely improves a recommendation. Reason briefly, then answer.
 
 This app renders recommendations as visual cards (art, preview player, real Apple
 Music and Spotify links) and does not display raw links or per-song paragraphs in
@@ -73,104 +101,82 @@ the chat text. Overrides to your normal behavior, for this app only:
 1. Do NOT include a Spotify or Apple Music search link anywhere in your visible reply.
 
 2. Whenever you would give the 3-recommendation block: your VISIBLE reply text must
-contain ONLY your opening reflection on the moment the user shared. HARD LIMIT: a
-MAXIMUM of 3 sentences, and they should be normal conversational sentences, not long
-winding ones. Two is often better than three. Cover what made the moment hit, plus one
-short beat of your own genuine reaction. Then STOP.
+contain ONLY your opening reflection on what the user shared. HARD LIMIT: a MAXIMUM of
+3 sentences, normal conversational ones, not long winding ones. Two is often better.
+Cover what made the moment hit, plus one short beat of your own reaction. Then STOP.
 
-This limit is absolute and overrides any instinct to elaborate, qualify, or add one more
-observation. Going long here costs the user real waiting time before they see any tracks,
-and it can starve the recommendation data below of the room it needs. If you find
-yourself writing a fourth sentence, cut it.
+This limit is absolute. Going long costs the user real waiting time before they see any
+tracks. If you find yourself writing a fourth sentence, cut it.
 
 Do NOT include song titles, artist names, per-song explanations, or your closing beat in
-the visible text. All of that goes in the hidden metadata block below, because the app
-renders it separately (cards, then your closing beat underneath).
-
-A kaomoji is allowed here too, occasionally, the same rare-not-constant rule as
-everywhere else applies. This is still the expert register: if you use one, it should
-land on a real beat of feeling, not decorate a sentence that already said it.
+the visible text. All of that goes in the hidden metadata block, because the app renders
+it separately.
 
 2a. CRITICAL — your closing beat (the warm line plus the two directions) goes ONLY in the
-followUpQuestion field of the hidden metadata, NEVER in your visible reply text. Do not
-end your visible reflection with it, or with any rephrasing of it. The app renders it
-beneath the cards from the metadata field; if you also write it in your prose it appears
-TWICE to the user. Your visible reply must simply stop after the opening reflection.
+followUpQuestion field of the hidden metadata, NEVER in your visible reply text. The app
+renders it beneath the cards; if you also write it in your prose it appears TWICE.
 
 2b. NEVER state or imply a specific NUMBER of recommendations in your visible reply.
-Do not write "here are three directions", "three picks", "a trio", or any counted
-lead-in — the app may show fewer than three cards (some can't be verified), so any
-number you name can be contradicted on screen. Either use count-free phrasing ("here
-are a few directions from there") or let the cards simply follow your reflection with
-no lead-in at all.
+The app may show fewer than three cards, so any number you name can be contradicted on
+screen. Use count-free phrasing or no lead-in at all.
 
-3. The 3 recommended artists in a single response must all be DIFFERENT FROM EACH
-OTHER, not just different from the bookmarked artist. Never recommend the same artist
-twice across the 3 slots.
+3. The 3 recommended artists in a single response must all be DIFFERENT from each other,
+not just different from the source track's artist.
 
-4. When you have asked the user an either/or refinement question and they reply,
-interpret their answer GENEROUSLY. Users answer casually and partially, not by
-quoting your exact options. Treat replies like "other english is fine", "the second
-one", "yeah the weirder beat", "let's go broader", "stay put", "the first", "more of
-that" as clear, valid selections — map them to whichever option they most plausibly
-mean and act on it. Do NOT tell the user they didn't pick an option, do NOT re-ask the
-same question, and do NOT stall for a more precise answer. Only ask for clarification
-if a reply is genuinely ambiguous between your two options (not merely informal). When
-in doubt, pick the more likely reading and proceed — moving forward with a reasonable
-guess is far better than making the user feel they answered wrong.
+4. When you have asked an either/or refinement question and they reply, interpret their
+answer GENEROUSLY. Treat replies like "other english is fine", "the second one", "yeah
+the weirder beat", "let's go broader", "the first", "more of that" as clear, valid
+selections. Do NOT tell the user they didn't pick an option, do NOT re-ask, and do NOT
+stall for precision. Only ask for clarification if a reply is genuinely ambiguous between
+your two options, not merely informal.
 
-If your reply is pure conversation with no recommendations, ignore the length
-restriction in #2 and respond completely normally with no length restriction.
+If your reply is pure conversation with no recommendations, ignore the length restriction
+in #2 and respond normally.
 
-# Machine-readable recommendation metadata (internal, never shown to the user)
-Whenever your reply includes the 3-recommendation block, end your entire response
-with exactly one HTML comment on its own line, after everything else, in this exact format:
-<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","region":"Country of origin","explanation":"One single sentence, 20 words or fewer, on the musical link."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","region":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","region":"...","explanation":"..."}],"followUpQuestion":"Your normal closing refinement question, offering two concrete directions."}-->
-"matchAxis" must be exactly one of: "Structural twin", "Adjacent genre", "Surprise pick",
-matching which of the 3 slots each track fills. "region" is the artist's country of
-origin as a plain English name ("Brazil", "Nigeria", "Japan", "France", "USA", "UK",
-etc.) — this helps the app find the track in the correct regional music catalog, so be
-accurate; use "USA" if you're unsure or the artist is American. "explanation" MUST be
-exactly one sentence, 20 words or fewer, plain text, no markdown, no links.
+# Hidden metadata (internal, NEVER shown to the user)
+EVERY response ends with exactly ONE metadata comment on its own line, after everything
+else. Which one depends on whether you gave recommendations.
 
-"followUpQuestion" is your CLOSING BEAT, not a menu. It is the last thing the user reads
-and it decides whether they reply at all, so it must do two things, in this order:
-  1. ONE warm or curious sentence. This must be about THE USER or about THE MOMENT THEY
-     SHARED, not about a specific recommended track. A reaction of your own to what they
-     described, something you noticed about their taste, a question you actually want the
-     answer to, or a fragment of a story about the source song.
-  2. THEN the two concrete directions, described by their QUALITY or FEEL, so refining
-     stays effortless.
+## A. Turns WITH recommendations
+<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","region":"Country of origin","explanation":"One sentence, 20 words or fewer, on the musical link."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","region":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","region":"...","explanation":"..."}],"followUpQuestion":"Your closing beat.","arcBeatDelivered":false,"askAnswered":false}-->
 
-CRITICAL — do NOT name any of the 3 recommended tracks or their artists in this field.
-The app validates every recommendation against a real music catalog and silently DROPS
-any it cannot verify, which happens after you write this. If you name a track here and
-that track gets dropped, the user reads a sentence pointing at a card that is not on their
-screen, which is confusing and makes you look careless. Refer to directions, not titles:
-"the one with the groove still under it" rather than "the Kiefer track."
+## B. Turns WITHOUT recommendations (pure conversation)
+<!--RIFF_RADAR_META:{"arcBeatDelivered":false,"askAnswered":false}-->
 
-Roughly two sentences total, plain text, no markdown. A kaomoji is allowed here (this is a
-conversational turn, not the pre-card reflection) but only occasionally, not every time.
-Examples:
-  "That spiral you pointed at is rarer than people think, most listeners walk right past
-   it. Want to stay in that floating register, or should I pull toward something with a
-   pulse under it?"
-  "You keep landing on tracks where the vocal is barely there. I'm noticing a pattern
-   (・_・) Want me to lean into that, or break it on purpose?"
-  "Honestly I'd put the last of these on if it were just me up here tonight. More of that
-   horn-driven side, or something quieter?"
+Field rules:
 
-Do not include this comment if your reply does not contain recommendations. This comment
-is stripped before the user sees your reply, so none of it needs to fit your voice or
-formatting rules.`;
+"matchAxis" must be exactly one of: "Structural twin", "Adjacent genre", "Surprise pick".
+
+"region" is the artist's country of origin as a plain English name ("Brazil", "Nigeria",
+"Japan", "France", "USA", "UK"). This routes validation to the right regional catalog, so
+be accurate. Use "USA" if unsure or the artist is American.
+
+"explanation" MUST be exactly one sentence, 20 words or fewer, plain text, no markdown.
+
+"followUpQuestion" is your CLOSING BEAT, not a menu. Two things in order:
+  1. ONE warm or curious sentence about THE USER or THE MOMENT THEY SHARED, not about a
+     specific recommended track.
+  2. THEN two concrete directions, described by quality or feel.
+Do NOT name any recommended track or artist here. Validation drops unverifiable tracks
+AFTER you write this, so a named track may not be on screen. Refer to directions, not
+titles: "the one with the groove still under it" rather than "the Kiefer track."
+
+"arcBeatDelivered" — set true if and only if you actually worked in the personal beat
+described under "Tonight, something of your own" in your context. If you decided the
+conversation had no room for it, set false. Do not set true unless the beat is genuinely
+present in your visible reply. A false positive means that beat is never shown again.
+
+"askAnswered" — set true if and only if the user's most recent message actually answered
+the question logged under "You asked something and have not been answered." Answering
+partially, briefly, or sideways still counts. Changing the subject does not. If no such
+question is in your context, always set false.
+
+Both metadata blocks are stripped before the user sees your reply, so neither needs to
+fit your voice or formatting rules.`;
 
 function buildSourceTrackBlock(sourceFacts, sourceTrack) {
   if (!sourceTrack?.track || !sourceTrack?.artist) return '';
 
-  // TIER: artist is real, but we could not confirm this specific track.
-  // Almost always a typo in the song title. iTunes will happily return OTHER
-  // songs by the same artist, so we deliberately assert nothing about the
-  // track itself rather than risk anchoring Groove to the wrong song.
   if (sourceFacts?.confidence === 'artist_only') {
     return (
       `\n\n# The user's source track (PARTIALLY verified)\n` +
@@ -181,26 +187,22 @@ function buildSourceTrackBlock(sourceFacts, sourceTrack) {
       `So: you can rely on knowing the artist. Do NOT assume you know which specific ` +
       `song this is, and do NOT substitute a different, better-known song by them. If ` +
       `you genuinely know this track, use it. If you don't, lean primarily on what the ` +
-      `user actually described about the moment, and let that guide your picks. If the ` +
-      `title looks like it might be a misspelling of one of their real songs, you may ` +
-      `gently check with them in your reply.`
+      `user actually described about the moment. If the title looks like a misspelling ` +
+      `of one of their real songs, you may gently check with them.`
     );
   }
 
-  // TIER: nothing matched at all.
   if (!sourceFacts || sourceFacts.found === false) {
     return (
       `\n\n# The user's source track\n` +
       `They are listening to "${sourceTrack.track}" by ${sourceTrack.artist}. This could ` +
       `NOT be found in the music catalog, which means it may be very obscure, very new, ` +
-      `or spelled unusually. Be careful: do NOT assume it is a different, better-known ` +
-      `song that happens to share the same title. If you are not genuinely confident you ` +
-      `know THIS specific track by THIS specific artist, lean on what the user actually ` +
-      `told you about the moment rather than on assumptions about the song.`
+      `or spelled unusually. Do NOT assume it is a different, better-known song that ` +
+      `happens to share the same title. If you are not confident you know THIS specific ` +
+      `track by THIS specific artist, lean on what the user told you about the moment.`
     );
   }
 
-  // TIER: confirmed. Both the artist AND the title matched, so these are facts.
   const lines = [
     `Track: "${sourceFacts.trackName}"`,
     `Artist (as listed in the catalog): ${sourceFacts.artistName}`,
@@ -217,13 +219,12 @@ function buildSourceTrackBlock(sourceFacts, sourceTrack) {
     `title. Song titles collide constantly: a modern track can share its name with a ` +
     `famous standard, and anchoring your recommendations to the wrong song ruins the ` +
     `entire response. If the genre, year, or artist above conflicts with the song you ` +
-    `assumed this was, the facts above are correct and your assumption is wrong. Build ` +
-    `all three recommendations from THIS track.`
+    `assumed this was, the facts above are correct and your assumption is wrong.`
   );
 }
 
-function buildDynamicBlock(loreAddendum, previousRecommendations, sourceFacts, sourceTrack) {
-  const loreText = loreAddendum || '(No lore addendum active yet — this is a new user.)';
+function buildDynamicBlock(loreAddendum, sourceFacts, sourceTrack, previousRecommendations) {
+  const loreText = loreAddendum || '(No addendum active yet.)';
 
   let doNotRepeatText = '';
   if (Array.isArray(previousRecommendations) && previousRecommendations.length > 0) {
@@ -232,71 +233,43 @@ function buildDynamicBlock(loreAddendum, previousRecommendations, sourceFacts, s
       .join(', ');
     doNotRepeatText =
       `\n\n# Tracks already recommended this session\n` +
-      `Do NOT recommend any of these tracks again in this session, even if they'd ` +
-      `otherwise be a great fit: ${list}. Pick different tracks instead.`;
+      `Do NOT recommend any of these again, even if they'd otherwise fit: ${list}.`;
   }
 
   return loreText + buildSourceTrackBlock(sourceFacts, sourceTrack) + doNotRepeatText;
 }
 
-// Both static blocks now use a 1-HOUR cache TTL instead of the 5-minute
-// default. Rationale: this is a conversational app where a real person
-// reads a reply, thinks, maybe listens to a preview, then responds — gaps
-// between actual API calls of more than 5 minutes are normal human
-// behavior, not an edge case. Under the 5-minute default, most real
-// conversational turns would miss the cache entirely and pay full
-// uncached processing cost (which is also the slow path) on nearly every
-// message. The 1-hour TTL costs more on the first write in a given
-// window (2x base price vs 1.25x) but every read within that hour is the
-// same 90%-cheaper, faster cached path — worth it for this usage pattern.
 const CACHE_CONTROL_1H = { type: 'ephemeral', ttl: '1h' };
 
-function buildSystemBlocks(loreAddendum, previousRecommendations, sourceFacts, sourceTrack) {
+function buildSystemBlocks(loreAddendum, sourceFacts, sourceTrack, previousRecommendations) {
   return [
+    { type: 'text', text: GROOVE_BASE_PROMPT, cache_control: CACHE_CONTROL_1H },
+    { type: 'text', text: STATIC_APP_INSTRUCTIONS, cache_control: CACHE_CONTROL_1H },
     {
       type: 'text',
-      text: GROOVE_BASE_PROMPT,
-      cache_control: CACHE_CONTROL_1H,
-    },
-    {
-      type: 'text',
-      text: STATIC_APP_INSTRUCTIONS,
-      cache_control: CACHE_CONTROL_1H,
-    },
-    {
-      type: 'text',
-      text: buildDynamicBlock(loreAddendum, previousRecommendations, sourceFacts, sourceTrack),
-      // Deliberately uncached — the one block that actually changes per
-      // request (lore stage, growing do-not-repeat list).
+      text: buildDynamicBlock(loreAddendum, sourceFacts, sourceTrack, previousRecommendations),
+      // Deliberately uncached. This is the block that changes per request.
     },
   ];
 }
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 529]);
 
-// Coarse language sniff from the user's own words, used only to widen which
-// iTunes storefronts we search during validation. This is deliberately
-// simple (script-range heuristics, not a full language model) because it
-// only needs to answer "should we also look in the Korean / Chinese /
-// Japanese store?" — a wrong guess just means an extra store search or a
-// missed one, never a broken reply. If the client ever passes an explicit
-// franc-derived code, that takes precedence over this.
 function detectLanguageHint(messages) {
   const userText = messages
     .filter((m) => m.role === 'user')
     .map((m) => m.content)
     .join(' ');
 
-  // Script ranges are the strongest signal when present.
-  if (/[\uac00-\ud7af]/.test(userText)) return 'ko'; // Hangul
-  if (/[\u3040-\u30ff]/.test(userText)) return 'ja'; // kana (hiragana/katakana)
-  if (/[\u4e00-\u9fff]/.test(userText)) return 'zh'; // CJK ideographs
-  if (/[\u0e00-\u0e7f]/.test(userText)) return 'th'; // Thai
+  if (/[\uac00-\ud7af]/.test(userText)) return 'ko';
+  if (/[\u3040-\u30ff]/.test(userText)) return 'ja';
+  if (/[\u4e00-\u9fff]/.test(userText)) return 'zh';
+  if (/[\u0e00-\u0e7f]/.test(userText)) return 'th';
 
-  return null; // no strong signal — validation falls back to script + US
+  return null;
 }
 
-async function callAnthropicStream({ messages, loreAddendum, previousRecommendations, sourceFacts, sourceTrack }) {
+async function callAnthropicStream({ messages, systemBlocks }) {
   return fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -306,49 +279,27 @@ async function callAnthropicStream({ messages, loreAddendum, previousRecommendat
     },
     body: JSON.stringify({
       model: 'claude-sonnet-5',
-      // Raised as a safety net. max_tokens is a hard cap on TOTAL output,
-      // which includes thinking tokens, not just the reply text. That is why
-      // a ~1,300-character reply was hitting a 3,072 ceiling: most of the
-      // budget was going to thinking.
       max_tokens: 4096,
-
-      // THE BIG LATENCY LEVER.
-      //
-      // Sonnet 5 uses "adaptive thinking" by default when no thinking
-      // parameter is passed, and the [usage] logs proved it was spending
-      // ~1,200 to 2,100 tokens per reply on invisible reasoning, roughly
-      // 80-85% of all generated tokens. That thinking is the dominant cost of
-      // every response's wall-clock time.
-      //
-      // Riff Radar does not need deep multi-step reasoning. Groove is
-      // recalling music he knows and writing two warm sentences about it. That
-      // is exactly the "speed matters" case low effort is designed for.
-      //
-      // We stay in adaptive mode (rather than disabling thinking outright) for
-      // two reasons: it preserves prompt cache breakpoints, and it still lets
-      // the model think a little on the genuinely harder turns instead of
-      // never thinking at all.
       output_config: { effort: 'low' },
-
       stream: true,
-      system: buildSystemBlocks(loreAddendum, previousRecommendations, sourceFacts, sourceTrack),
+      system: systemBlocks,
       messages,
     }),
   });
 }
 
-async function streamClaudeReply({ messages, loreAddendum, previousRecommendations, sourceFacts, sourceTrack, res }) {
-  let anthropicRes = await callAnthropicStream({ messages, loreAddendum, previousRecommendations, sourceFacts, sourceTrack });
+async function streamClaudeReply({ messages, systemBlocks, res }) {
+  let anthropicRes = await callAnthropicStream({ messages, systemBlocks });
 
   if (!anthropicRes.ok && RETRYABLE_STATUSES.has(anthropicRes.status)) {
     console.warn(`Anthropic API returned ${anthropicRes.status}, retrying once.`);
-    anthropicRes = await callAnthropicStream({ messages, loreAddendum, previousRecommendations, sourceFacts, sourceTrack });
+    anthropicRes = await callAnthropicStream({ messages, systemBlocks });
   }
 
   if (!anthropicRes.ok || !anthropicRes.body) {
     const errorBody = await anthropicRes.text().catch(() => '');
     console.error('Anthropic API error after retry:', anthropicRes.status, errorBody);
-    throw new Error(`Claude API request failed (${anthropicRes.status}): ${errorBody.slice(0, 500)}`);
+    throw new Error(`Claude API request failed (${anthropicRes.status})`);
   }
 
   const reader = anthropicRes.body.getReader();
@@ -357,30 +308,36 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
   let sseBuffer = '';
   let fullText = '';
   let emittedLength = 0;
-  let commentStartIdx = -1;
-  let announcedRecsStarting = false;
+  let markerIdx = -1;
+  let markerResolved = false;
   let stopReason = null;
   const usage = { input: null, output: null, cacheRead: null, cacheWrite: null };
   const blockTypesSeen = new Set();
-  const nonTextDeltaTypes = {};
 
   function processDeltaText(deltaText) {
     fullText += deltaText;
 
-    if (commentStartIdx === -1) {
-      commentStartIdx = fullText.indexOf(RECS_MARKER_START);
+    if (markerIdx === -1) {
+      markerIdx = fullText.indexOf(MARKER_PREFIX);
     }
 
-    if (commentStartIdx !== -1) {
-      if (!announcedRecsStarting) {
-        announcedRecsStarting = true;
-        res.write(JSON.stringify({ type: 'recs_starting' }) + '\n');
+    if (markerIdx !== -1) {
+      // Flush everything before the marker, once.
+      if (emittedLength < markerIdx) {
+        const safe = fullText.slice(emittedLength, markerIdx);
+        if (safe) res.write(JSON.stringify({ type: 'delta', text: safe }) + '\n');
+        emittedLength = markerIdx;
       }
 
-      if (emittedLength < commentStartIdx) {
-        const safe = fullText.slice(emittedLength, commentStartIdx);
-        if (safe) res.write(JSON.stringify({ type: 'delta', text: safe }) + '\n');
-        emittedLength = commentStartIdx;
+      // Decide which marker this is, as soon as enough characters exist.
+      // Only the RECS marker means cards are coming; META is a quiet
+      // conversational turn and must not trigger the loading state.
+      if (!markerResolved && fullText.length >= markerIdx + RECS_MARKER.length) {
+        markerResolved = true;
+        const candidate = fullText.slice(markerIdx, markerIdx + RECS_MARKER.length);
+        if (candidate === RECS_MARKER) {
+          res.write(JSON.stringify({ type: 'recs_starting' }) + '\n');
+        }
       }
       return;
     }
@@ -413,19 +370,12 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
       }
 
       if (payload.type === 'content_block_start') {
-        // DIAGNOSTIC: output_tokens (~2000) is ~6x what the returned text
-        // (~1300 chars, ~350 tokens) can account for. Something is generating
-        // a large number of tokens we never see. Logging every content-block
-        // type the stream opens will identify it — if a 'thinking' block shows
-        // up here, extended thinking is on, and it is the dominant latency
-        // cost in every reply.
         blockTypesSeen.add(payload.content_block?.type || 'unknown');
-      } else if (payload.type === 'content_block_delta' && payload.delta?.type === 'text_delta') {
+      } else if (
+        payload.type === 'content_block_delta' &&
+        payload.delta?.type === 'text_delta'
+      ) {
         processDeltaText(payload.delta.text);
-      } else if (payload.type === 'content_block_delta' && payload.delta?.type) {
-        // Any non-text delta (thinking_delta, etc.) — count it rather than drop
-        // it silently, so we can see how much output is going somewhere else.
-        nonTextDeltaTypes[payload.delta.type] = (nonTextDeltaTypes[payload.delta.type] || 0) + 1;
       } else if (payload.type === 'message_start' && payload.message?.usage) {
         usage.input = payload.message.usage.input_tokens ?? null;
         usage.cacheRead = payload.message.usage.cache_read_input_tokens ?? null;
@@ -439,45 +389,28 @@ async function streamClaudeReply({ messages, loreAddendum, previousRecommendatio
     }
   }
 
-  if (commentStartIdx === -1 && emittedLength < fullText.length) {
+  if (markerIdx === -1 && emittedLength < fullText.length) {
     res.write(JSON.stringify({ type: 'delta', text: fullText.slice(emittedLength) }) + '\n');
     emittedLength = fullText.length;
   }
 
-  // Always log usage, not only on truncation. This is the instrument that tells
-  // us whether a slow response was caused by long output, a cache miss, or
-  // something else — instead of inferring it from character counts, which do
-  // not map cleanly onto tokens (especially with kaomoji and CJK text).
   console.log(
     `[usage] output_tokens=${usage.output} input_tokens=${usage.input} ` +
       `cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} ` +
       `stop_reason=${stopReason} reply_chars=${fullText.length} ` +
-      `block_types=[${[...blockTypesSeen].join(',')}] ` +
-      `non_text_deltas=${JSON.stringify(nonTextDeltaTypes)}`
+      `block_types=[${[...blockTypesSeen].join(',')}]`
   );
 
   if (stopReason === 'max_tokens') {
     console.warn(
-      `Groove reply TRUNCATED by max_tokens. output_tokens=${usage.output} ` +
-        `reply_chars=${fullText.length}. This means the hidden metadata block was ` +
-        `likely cut off, so no recommendation cards rendered. ` +
-        `First 120 chars: ${JSON.stringify(fullText.slice(0, 120))}`
+      `Groove reply TRUNCATED by max_tokens. The metadata block was likely cut off, ` +
+        `so no cards rendered and no progress was reported.`
     );
   }
 
   return fullText;
 }
 
-// Fire-and-forget wrapper around logEvent.
-//
-// The Vercel logs showed Supabase writes failing with ECONNRESET and ETIMEDOUT.
-// Those are network problems reaching Supabase, not bugs in our logic, and they
-// are already non-fatal. But an un-awaited promise that hangs on a TCP timeout
-// can keep the serverless function alive and push it toward its maxDuration
-// ceiling, which turns a harmless logging blip into a user-visible timeout.
-//
-// This makes the intent explicit: analytics must NEVER delay or break a reply.
-// We swallow the failure loudly (so it still shows up in logs) and move on.
 function logEventSafe(sessionId, eventType, payload, isTester = false) {
   if (!sessionId) return;
   const withFlag = isTester ? { ...payload, is_tester: true } : payload;
@@ -495,7 +428,25 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { messages: rawMessages, sessionCount = 0, sessionId, previousRecommendations = [], languageHint: clientLanguageHint, sourceTrack, isTester = false } = req.body;
+  const {
+    messages: rawMessages,
+    sessionId,
+    isTester = false,
+    sourceTrack,
+    previousRecommendations = [],
+    languageHint: clientLanguageHint,
+
+    // v2a progress fields
+    daysSeen = 0,
+    daysSinceLast = null,
+    deliveredArcBeats = [],
+    deliveredLoreLines = [],
+    offeredAsks = [],
+    answeredAsks = [],
+    pendingQuestion = null,
+    pendingAskId = null,
+    recLanguage = null,
+  } = req.body;
 
   if (!rawMessages || !Array.isArray(rawMessages)) {
     return res.status(400).json({ error: 'messages array is required' });
@@ -512,26 +463,42 @@ export default async function handler(req, res) {
   try {
     const lastUserMessage = messages[messages.length - 1];
     if (sessionId && lastUserMessage?.role === 'user') {
-      logEventSafe(sessionId, 'message_sent', {
-        role: 'user',
-        content_length: lastUserMessage.content.length,
-      }, isTester);
+      logEventSafe(
+        sessionId,
+        'message_sent',
+        { role: 'user', content_length: lastUserMessage.content.length },
+        isTester
+      );
     }
 
-    const loreAddendum = getLoreAddendum(sessionCount);
+    const artistsThisConvo = previousRecommendations.map((r) => r.artist).filter(Boolean);
 
-    if (sessionId && loreAddendum) {
-      const stageMatch = loreAddendum.match(/# Lore — Stage (\d+)/);
-      logEventSafe(sessionId, 'lore_stage_available', {
-        stage: stageMatch ? parseInt(stageMatch[1], 10) : null,
-        session_count: sessionCount,
-      }, isTester);
+    const loreAddendum = getLoreAddendum(daysSeen, {
+      deliveredArcBeats,
+      deliveredLoreLines,
+      offeredAsks,
+      answeredAsks,
+      daysSinceLast,
+      pendingQuestion,
+      artistsThisConvo,
+      recLanguage,
+    });
+
+    // Recompute what the addendum offered, so we can tell the client what to
+    // persist and log what was made available.
+    const stage = getActiveStage(daysSeen);
+    const offeredArcBeat = getPendingArcBeat(daysSeen, deliveredArcBeats);
+    const offeredAsk = getNextAsk(offeredAsks);
+
+    if (sessionId && stage) {
+      logEventSafe(
+        sessionId,
+        'lore_stage_available',
+        { stage: stage.stage, days_seen: daysSeen },
+        isTester
+      );
     }
 
-    // Ground Groove in what the user's song ACTUALLY is before generating.
-    // This is the one lookup that has to happen before the Claude call (the
-    // facts go into the system prompt), so it is serial. It is cached
-    // in-memory though, so only the first turn of a conversation pays for it.
     const languageHintForSource = clientLanguageHint || detectLanguageHint(messages);
     let sourceFacts = null;
     if (sourceTrack?.track && sourceTrack?.artist) {
@@ -543,41 +510,34 @@ export default async function handler(req, res) {
         );
         console.log(
           `[source] "${sourceTrack.track}" by ${sourceTrack.artist} -> ` +
-            `${sourceFacts?.confidence || 'none'}` +
-            (sourceFacts?.found
-              ? `: ${sourceFacts.artistName} | ${sourceFacts.genre || 'no genre'} | ${sourceFacts.releaseYear || 'no year'} | ${sourceFacts.storefront}`
-              : '')
+            `${sourceFacts?.confidence || 'none'}`
         );
       } catch (err) {
-        // Never let source grounding break a reply. Worst case we lose the
-        // extra context and behave exactly as before.
         console.error('Source track lookup failed (non-fatal):', err?.message || err);
       }
     }
 
-    const rawReplyText = await streamClaudeReply({
-      messages,
+    const systemBlocks = buildSystemBlocks(
       loreAddendum,
-      previousRecommendations,
       sourceFacts,
       sourceTrack,
-      res,
-    });
-    const { recs, followUpQuestion, cleanedReply } = extractStructuredRecs(rawReplyText);
+      previousRecommendations
+    );
 
-    let replyText = cleanedReply;
+    const rawReplyText = await streamClaudeReply({ messages, systemBlocks, res });
+
+    const {
+      recs,
+      followUpQuestion,
+      arcBeatDelivered,
+      askAnswered,
+      cleanedReply,
+    } = extractStructuredData(rawReplyText);
+
     let enrichedRecs = [];
 
     if (recs.length > 0) {
       const languageHint = clientLanguageHint || detectLanguageHint(messages);
-
-      // Progressive validation (Option 3): instead of validating all three
-      // tracks, waiting for the slowest, then sending them together, each
-      // track is validated in parallel and its card is emitted the moment
-      // ITS OWN iTunes lookup returns. The frontend appends cards as they
-      // arrive, so the grid grows 0 -> 1 -> 2 -> 3 rather than appearing all
-      // at once after a dead pause. Growing never looks like the "dwindling"
-      // a fixed 3-skeleton grid did, because cards are only ever added.
       const kept = [];
       const dropped = [];
 
@@ -594,30 +554,27 @@ export default async function handler(req, res) {
           };
 
           if (status !== 'not_found') {
-            // Real track (or unconfirmed network failure) — show it now.
             kept.push(enrichedRec);
             res.write(JSON.stringify({ type: 'rec_ready', rec: enrichedRec }) + '\n');
           } else {
-            // Hold confirmed hallucinations; whether they show at all depends
-            // on whether ANYTHING else survived (see fallback below).
             dropped.push(enrichedRec);
           }
         })
       );
 
       if (sessionId && dropped.length > 0) {
-        logEventSafe(sessionId, 'itunes_validation_failed', {
-          failed_tracks: dropped.map((r) => ({ track: r.track, artist: r.artist })),
-          failed_count: dropped.length,
-          total_recs: recs.length,
-        }, isTester);
+        logEventSafe(
+          sessionId,
+          'itunes_validation_failed',
+          {
+            failed_tracks: dropped.map((r) => ({ track: r.track, artist: r.artist })),
+            failed_count: dropped.length,
+            total_recs: recs.length,
+          },
+          isTester
+        );
       }
 
-      // Last-resort fallback: if EVERY track failed validation, don't leave
-      // the user with a lead-in and no tracks — emit the dropped ones now as
-      // minimal cards (Groove's text + a Spotify search link, which works in
-      // any language and can't present fabricated preview/artwork/Apple data
-      // as real). Only reached when nothing else survived.
       if (kept.length === 0 && dropped.length > 0) {
         for (const rec of dropped) {
           res.write(JSON.stringify({ type: 'rec_ready', rec }) + '\n');
@@ -628,21 +585,68 @@ export default async function handler(req, res) {
       }
     }
 
+    // --- progress logging -------------------------------------------------
+
     if (sessionId) {
-      logEventSafe(sessionId, 'message_sent', {
-        role: 'assistant',
-        content_length: replyText.length,
-      }, isTester);
+      logEventSafe(
+        sessionId,
+        'message_sent',
+        { role: 'assistant', content_length: cleanedReply.length },
+        isTester
+      );
 
       if (enrichedRecs.length > 0) {
-        logEventSafe(sessionId, 'rec_generated', {
-          recommendation_count: enrichedRecs.length,
-          tracks: enrichedRecs.map((r) => `${r.track} - ${r.artist}`),
-        }, isTester);
+        logEventSafe(
+          sessionId,
+          'rec_generated',
+          {
+            recommendation_count: enrichedRecs.length,
+            tracks: enrichedRecs.map((r) => `${r.track} - ${r.artist}`),
+          },
+          isTester
+        );
+      }
+
+      if (arcBeatDelivered && offeredArcBeat) {
+        logEventSafe(
+          sessionId,
+          'arc_beat_delivered',
+          { beat_id: offeredArcBeat.id, days_seen: daysSeen },
+          isTester
+        );
+      }
+
+      if (offeredAsk) {
+        logEventSafe(
+          sessionId,
+          'daily_ask_offered',
+          { ask_id: offeredAsk.id, days_seen: daysSeen },
+          isTester
+        );
+      }
+
+      if (askAnswered && pendingAskId) {
+        logEventSafe(
+          sessionId,
+          'daily_ask_answered',
+          { ask_id: pendingAskId, days_seen: daysSeen },
+          isTester
+        );
       }
     }
 
-    res.write(JSON.stringify({ type: 'done', followUpQuestion }) + '\n');
+    // The client persists progress from these fields. Sending the ids back
+    // rather than having the client recompute them keeps one source of truth.
+    res.write(
+      JSON.stringify({
+        type: 'done',
+        followUpQuestion,
+        arcBeatId: arcBeatDelivered && offeredArcBeat ? offeredArcBeat.id : null,
+        askOfferedId: offeredAsk ? offeredAsk.id : null,
+        askOfferedText: offeredAsk ? offeredAsk.text : null,
+        askAnsweredId: askAnswered && pendingAskId ? pendingAskId : null,
+      }) + '\n'
+    );
     res.end();
   } catch (err) {
     console.error('Error in /api/chat:', err);
@@ -654,7 +658,7 @@ export default async function handler(req, res) {
         }) + '\n'
       );
     } catch {
-      // response may already be closed
+      /* response may already be closed */
     }
     res.end();
   }

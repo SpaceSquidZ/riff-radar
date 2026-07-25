@@ -25,6 +25,12 @@ const ALLOWED_EVENTS = new Set([
   'rec_generated',
   'itunes_validation_failed',
 
+  // --- v2a character system (July 2026) ---
+  'lore_stage_available',
+  'arc_beat_delivered',
+  'daily_ask_offered',
+  'daily_ask_answered',
+
   // --- arriving with the v4 rebuild (PRD v4.0 §8) ---
   'opener_pair_shown',
   'opener_track_engaged',
