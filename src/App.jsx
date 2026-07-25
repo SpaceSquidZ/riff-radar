@@ -55,6 +55,7 @@ export default function App() {
   const audioElRef = useRef(null);
   const [activePreviewKey, setActivePreviewKey] = useState(null);
   const loggedPreviewKeysRef = useRef(new Set());
+  const inputRef = useRef(null);
 
   useEffect(() => {
     const audio = new Audio();
@@ -423,17 +424,33 @@ export default function App() {
                 })}
                 {loading && <p style={{ opacity: 0.6 }}>{loadingMessage}</p>}
 
-                <div style={{ marginTop: '1.5rem', display: 'flex', gap: '8px', maxWidth: '640px' }}>
-                  <input
-                    type="text"
+                <div style={{ marginTop: '1.5rem', display: 'flex', gap: '8px', maxWidth: '640px', alignItems: 'flex-end' }}>
+                  <textarea
+                    ref={inputRef}
                     value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                    rows={1}
+                    onChange={(e) => {
+                      setInput(e.target.value);
+                      // Auto-grow: reset to 'auto' first so the box can SHRINK
+                      // when text is deleted, not only expand.
+                      const el = e.target;
+                      el.style.height = 'auto';
+                      el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+                    }}
+                    onKeyDown={(e) => {
+                      // Enter sends. Shift+Enter inserts a newline, matching
+                      // the convention every chat app already uses, and only
+                      // possible with a textarea in the first place.
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSend();
+                        if (inputRef.current) inputRef.current.style.height = 'auto';
+                      }
+                    }}
                     placeholder={isStreaming ? 'Groove is replying...' : 'Type a message...'}
                     disabled={isStreaming}
+                    className="chat-input"
                     style={{
-                      flex: 1,
-                      fontSize: '16px',
                       opacity: isStreaming ? 0.6 : 1,
                       cursor: isStreaming ? 'not-allowed' : 'text',
                     }}

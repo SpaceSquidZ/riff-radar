@@ -386,6 +386,35 @@ export function getNextAsk(offeredAsks = []) {
 }
 
 /**
+ * Whether to offer an ask on THIS turn, and which one.
+ *
+ * BUG THIS FIXES: the ask block was previously added to the addendum on every
+ * single request. The prompt said "do not ask twice," but the prompt was being
+ * handed a fresh ask every turn, so Groove reasonably kept asking. Testing
+ * produced three asks in a five-turn conversation.
+ *
+ * Two hard guards, enforced in code rather than left to the model:
+ *
+ *   1. An ask is already outstanding. Asking something new while a previous
+ *      question hangs unanswered is the single most annoying thing this
+ *      mechanic could do, and it also makes askAnswered ambiguous: if two
+ *      questions are live, which one did they answer?
+ *
+ *   2. An arc beat is being delivered this turn. Both are "extras" on top of
+ *      the actual reply, and stacking them makes one turn carry a plot beat, a
+ *      personal question, and recommendations all at once. Testing showed
+ *      exactly this on turn one.
+ *
+ * Both are single conditions on purpose. The prompt-level instruction stays as
+ * a belt to this braces, but the code is now what actually binds.
+ */
+export function selectAsk({ offeredAsks = [], pendingQuestion = null, hasArcBeat = false }) {
+  if (pendingQuestion) return null;
+  if (hasArcBeat) return null;
+  return getNextAsk(offeredAsks);
+}
+
+/**
  * Openness guidance by stage. This REPLACES the v1 identity-deflection pools.
  *
  * v1's mystery was "what are you," a yes/no the character had to dodge forever,
@@ -514,7 +543,7 @@ Do not raise it yourself tonight.
 
   // --- the ask -----------------------------------------------------------
 
-  const ask = getNextAsk(offeredAsks);
+  const ask = selectAsk({ offeredAsks, pendingQuestion, hasArcBeat: !!arcBeat });
   if (ask) {
     out += `# Something you want from them
 If the conversation has room, ask this. Once, in your own words, phrased however fits the moment:

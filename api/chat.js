@@ -39,7 +39,7 @@ import {
   getLoreAddendum,
   getActiveStage,
   getPendingArcBeat,
-  getNextAsk,
+  selectAsk,
 } from '../src/groovePrompt.js';
 import { logEvent } from '../src/supabaseClient.js';
 import { validateOneTrack, lookupTrackFacts } from './lib/validateTracks.js';
@@ -485,10 +485,16 @@ export default async function handler(req, res) {
     });
 
     // Recompute what the addendum offered, so we can tell the client what to
-    // persist and log what was made available.
+    // persist and log what was made available. selectAsk must be called with
+    // the SAME arguments the addendum used, or the server will report an ask
+    // that Groove was never given.
     const stage = getActiveStage(daysSeen);
     const offeredArcBeat = getPendingArcBeat(daysSeen, deliveredArcBeats);
-    const offeredAsk = getNextAsk(offeredAsks);
+    const offeredAsk = selectAsk({
+      offeredAsks,
+      pendingQuestion,
+      hasArcBeat: !!offeredArcBeat,
+    });
 
     if (sessionId && stage) {
       logEventSafe(

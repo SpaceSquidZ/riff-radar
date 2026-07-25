@@ -557,3 +557,35 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
     max-width: 100%;
   }
 }
+
+/* Chat input.
+   A <textarea>, not an <input type="text">, because a single-line input
+   scrolls horizontally when text exceeds its width and can never wrap or
+   grow. No CSS fixes that: it is the element's defined behavior. The box
+   auto-grows in App.jsx up to a 160px ceiling, after which it scrolls
+   vertically like any chat app. */
+.chat-input {
+  flex: 1;
+  font-size: 16px; /* same iOS-zoom guard as the form inputs */
+  font-family: inherit;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border: 1px solid #3a3d48;
+  border-radius: 10px;
+  background: #1e2029;
+  color: #e8e8e8;
+  resize: none;      /* the JS handles sizing; a drag handle fights it */
+  overflow-y: auto;
+  box-sizing: border-box;
+  min-height: 42px;
+  max-height: 160px;
+}
+
+.chat-input::placeholder {
+  color: #7c7f8c;
+}
+
+.chat-input:focus {
+  outline: none;
+  border-color: #4a90d9;
+}
