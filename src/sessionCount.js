@@ -1,40 +1,48 @@
 // src/sessionCount.js
 //
-// Counts distinct visits, pre-accounts.
+// Counts DISTINCT DAYS visited, plus a persistent visitor id.
 //
-// WHY THIS EXISTS
-// App.jsx was sending `sessionCount: 0` hardcoded on every request. In
-// groovePrompt.js, getActiveStage(0) fails every threshold (stage 1 needs >= 1),
-// so getLoreAddendum returned an empty string and NO LORE HAS EVER FIRED in
-// production. Not "users only saw stage 1" — they saw nothing at all. This is
-// the likeliest reason no reviewer noticed Groove had a backstory.
+// WHY DAYS AND NOT SESSIONS
+// D-019 defines connection strength as growing from distinct days visited,
+// tracks discussed, and questions answered, with a per-day cap, and states the
+// reason plainly: "it cannot be sprinted in one night." Any session definition
+// based on idle gaps (the GA4/Mixpanel 30-minute convention) breaks that — a
+// user with a morning, lunch, and evening visit banks three sessions in a day.
 //
-// HONEST LIMITATIONS
-// localStorage is per-browser and clearable, so this is a soft counter, not an
-// identity system. Someone on a new device starts at 1; someone who clears
-// storage resets. That is acceptable at this stage and matches D-019's note
-// that real connection strength requires accounts (November).
+// Days are also the only definition that cannot be gamed from the browser.
+// Tab-open counting punishes people who keep tabs open and double-counts people
+// who close them. Idle-gap counting rewards leaving and coming back. Calendar
+// days require actual time to pass.
 //
-// The visitor id is separate from the session id: session id changes every
-// visit (sessionStorage), visitor id persists across visits (localStorage).
-// Having both is what makes return_visit and Day-30 retention computable.
+// This is the same unit November's connection-strength system will use, so the
+// thresholds change later but the counting does not. No migration.
+//
+// WHAT THIS IS NOT
+// This is not an analytics session definition. Every event carries a
+// server-assigned created_at and a visitor_id, so any session model (30-minute
+// gaps, tab-opens, whatever) can be computed retroactively from the raw log in
+// September. Do not couple the analytics definition to this one.
+//
+// HONEST LIMITATION
+// localStorage is per-browser and clearable. A new device starts over. That is
+// acceptable pre-accounts and is exactly what D-019 defers to November.
 
 const VISITOR_KEY = 'rr_visitor_id';
-const COUNT_KEY = 'rr_session_count';
-const COUNTED_MARKER = 'rr_session_counted';
+const DAYS_KEY = 'rr_days_seen';
+const LAST_DAY_KEY = 'rr_last_day';
 const LAST_SEEN_KEY = 'rr_last_seen';
 
-function safeGet(storage, key) {
+function safeGet(key) {
   try {
-    return storage.getItem(key);
+    return localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-function safeSet(storage, key, value) {
+function safeSet(key, value) {
   try {
-    storage.setItem(key, value);
+    localStorage.setItem(key, value);
   } catch {
     /* private browsing, ignore */
   }
@@ -49,45 +57,83 @@ function makeId() {
   return `v_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// LOCAL date, deliberately. A "day" should mean the user's day, not UTC's.
+// Someone listening at 11pm Central should not roll over to tomorrow because
+// a server somewhere is already past midnight.
+function todayKey() {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
 /**
- * Call ONCE at app mount, before anything reads the count.
- * Increments the counter at most once per browser session.
+ * Call ONCE at app mount.
+ * Increments the day counter only if this is a new calendar day.
  *
- * @returns {{ visitorId: string, sessionCount: number, daysSinceLast: number|null }}
+ * @returns {{
+ *   visitorId: string,
+ *   daysSeen: number,
+ *   daysSinceLast: number|null,
+ *   isNewDay: boolean,
+ *   isReturning: boolean
+ * }}
  */
 export function initSession() {
-  let visitorId = safeGet(localStorage, VISITOR_KEY);
+  let visitorId = safeGet(VISITOR_KEY);
+  const isFirstEver = !visitorId;
   if (!visitorId) {
     visitorId = makeId();
-    safeSet(localStorage, VISITOR_KEY, visitorId);
+    safeSet(VISITOR_KEY, visitorId);
   }
 
-  const lastSeenRaw = safeGet(localStorage, LAST_SEEN_KEY);
+  const lastSeenRaw = safeGet(LAST_SEEN_KEY);
   let daysSinceLast = null;
   if (lastSeenRaw) {
     const ms = Date.now() - parseInt(lastSeenRaw, 10);
     if (!Number.isNaN(ms)) daysSinceLast = Math.floor(ms / 86400000);
   }
 
-  // sessionStorage clears when the tab closes, so this marker guarantees the
-  // counter moves once per visit no matter how many times the page reloads.
-  if (!safeGet(sessionStorage, COUNTED_MARKER)) {
-    const next = getSessionCount() + 1;
-    safeSet(localStorage, COUNT_KEY, String(next));
-    safeSet(sessionStorage, COUNTED_MARKER, '1');
+  const today = todayKey();
+  const lastDay = safeGet(LAST_DAY_KEY);
+  const isNewDay = lastDay !== today;
+
+  if (isNewDay) {
+    safeSet(DAYS_KEY, String(getDaysSeen() + 1));
+    safeSet(LAST_DAY_KEY, today);
   }
 
-  safeSet(localStorage, LAST_SEEN_KEY, String(Date.now()));
+  safeSet(LAST_SEEN_KEY, String(Date.now()));
 
-  return { visitorId, sessionCount: getSessionCount(), daysSinceLast };
+  return {
+    visitorId,
+    daysSeen: getDaysSeen(),
+    daysSinceLast,
+    isNewDay,
+    isReturning: !isFirstEver,
+  };
 }
 
-export function getSessionCount() {
-  const raw = safeGet(localStorage, COUNT_KEY);
-  const n = parseInt(raw || '0', 10);
+export function getDaysSeen() {
+  const n = parseInt(safeGet(DAYS_KEY) || '0', 10);
   return Number.isNaN(n) ? 0 : n;
 }
 
 export function getVisitorId() {
-  return safeGet(localStorage, VISITOR_KEY) || null;
+  return safeGet(VISITOR_KEY) || null;
 }
+
+/**
+ * Days since the previous visit, or null on a first visit.
+ * Read at send time so Groove can greet a returning user differently.
+ */
+export function getDaysSinceLast() {
+  const raw = safeGet(LAST_SEEN_KEY);
+  if (!raw) return null;
+  const ms = Date.now() - parseInt(raw, 10);
+  return Number.isNaN(ms) ? null : Math.floor(ms / 86400000);
+}
+
+// Alias so callers reading "session count" get the day count. The prompt's
+// stage thresholds are expressed in these units.
+export const getSessionCount = getDaysSeen;
