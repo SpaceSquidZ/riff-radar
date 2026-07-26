@@ -589,3 +589,122 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   outline: none;
   border-color: #4a90d9;
 }
+
+/* --- Opener records ---
+   Records Groove has on, NOT recommendations (D-025). Visually distinct from
+   .rec-row on purpose: if the opener looks like a rec card, the distinction
+   between "what I have on" and "what I found for you" collapses and the user
+   reads the opener as unrequested recommendations.
+
+   Quieter than a rec card. No white fill, no pill, no explanation. These sit
+   in the room rather than being handed to you.
+*/
+.opener-records {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  width: 100%;
+  max-width: 560px;
+}
+
+.opener-record {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #2c2f3a;
+  border-radius: 10px;
+  background: #1c1e26;
+  color: #e8e8e8;
+}
+
+.opener-record-art {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 5px;
+  object-fit: cover;
+  display: block;
+}
+
+.opener-record-art-empty {
+  background: #262932;
+}
+
+/* min-width: 0 is what allows the text to shrink inside a flex row. Without it
+   the body refuses to go below its content width and pushes the row wide. */
+.opener-record-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.opener-record-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  color: #f0f0f2;
+  overflow-wrap: anywhere;
+}
+
+.opener-record-artist {
+  font-size: 13px;
+  color: #a4a7b3;
+  margin: 1px 0 0 0;
+  overflow-wrap: anywhere;
+}
+
+.opener-record-meta {
+  font-size: 11px;
+  color: #71747f;
+  margin: 3px 0 0 0;
+}
+
+.opener-record-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.opener-record-play {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid #3a3d48;
+  background: #262932;
+  color: #e8e8e8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.opener-record-play:hover {
+  background: #30333d;
+}
+
+.opener-record-link {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  border: 1px solid #3a3d48;
+  background: #262932;
+  color: #c8cbd6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.opener-record-link:hover {
+  background: #30333d;
+  color: #f0f0f2;
+}
+
+@media (max-width: 700px) {
+  .opener-records {
+    max-width: 100%;
+  }
+}

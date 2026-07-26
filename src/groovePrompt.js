@@ -369,11 +369,35 @@ export function getActiveStage(daysSeen) {
   return null;
 }
 
-/** The earliest unlocked arc beat this person has not been shown. */
-export function getPendingArcBeat(daysSeen, deliveredArcBeats = []) {
+/**
+ * The earliest unlocked arc beat this person has not been shown.
+ * Suppressed entirely on the user's first turn: see MIN_USER_TURNS_FOR_EXTRAS.
+ */
+export function getPendingArcBeat(daysSeen, deliveredArcBeats = [], userTurnCount = 99) {
+  if (!extrasAllowed(userTurnCount)) return null;
   return ARC_BEATS.find(
     (b) => daysSeen >= b.minDays && !deliveredArcBeats.includes(b.id)
   ) || null;
+}
+
+// ---------------------------------------------------------------------------
+// TURN GATING FOR EXTRAS
+//
+// Turn one already carries a lot: a greeting, two records, and the user's first
+// real exchange. Adding an arc beat and a personal question on top means four
+// things happening before the user has spoken twice.
+//
+// So arc beats and pool asks are suppressed until the user has sent at least
+// this many messages. The opener is allowed to be the whole event.
+//
+// This is separate from day-based gating. A stage can be unlocked by day count
+// and still be suppressed on turn one of that day.
+// ---------------------------------------------------------------------------
+
+const MIN_USER_TURNS_FOR_EXTRAS = 2;
+
+export function extrasAllowed(userTurnCount = 0) {
+  return userTurnCount >= MIN_USER_TURNS_FOR_EXTRAS;
 }
 
 /** Next unoffered ask; cycles back to the start once the pool is exhausted. */
@@ -408,7 +432,13 @@ export function getNextAsk(offeredAsks = []) {
  * Both are single conditions on purpose. The prompt-level instruction stays as
  * a belt to this braces, but the code is now what actually binds.
  */
-export function selectAsk({ offeredAsks = [], pendingQuestion = null, hasArcBeat = false }) {
+export function selectAsk({
+  offeredAsks = [],
+  pendingQuestion = null,
+  hasArcBeat = false,
+  userTurnCount = 99,
+}) {
+  if (!extrasAllowed(userTurnCount)) return null;
   if (pendingQuestion) return null;
   if (hasArcBeat) return null;
   return getNextAsk(offeredAsks);
@@ -478,6 +508,7 @@ export function getLoreAddendum(daysSeen = 0, context = {}) {
     pendingQuestion = null,
     artistsThisConvo = [],
     recLanguage = null,
+    userTurnCount = 99,
   } = context;
 
   let out = '\n\n';
@@ -518,7 +549,7 @@ If their message answers it, acknowledge that before anything else. If it does n
 
   // --- the episode --------------------------------------------------------
 
-  const arcBeat = getPendingArcBeat(daysSeen, deliveredArcBeats);
+  const arcBeat = getPendingArcBeat(daysSeen, deliveredArcBeats, userTurnCount);
   if (arcBeat) {
     out += `# Tonight, something of your own
 ${arcBeat.text}
@@ -543,7 +574,12 @@ Do not raise it yourself tonight.
 
   // --- the ask -----------------------------------------------------------
 
-  const ask = selectAsk({ offeredAsks, pendingQuestion, hasArcBeat: !!arcBeat });
+  const ask = selectAsk({
+    offeredAsks,
+    pendingQuestion,
+    hasArcBeat: !!arcBeat,
+    userTurnCount,
+  });
   if (ask) {
     out += `# Something you want from them
 If the conversation has room, ask this. Once, in your own words, phrased however fits the moment:

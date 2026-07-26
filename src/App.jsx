@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import LandingScreen, { hasSeenLanding } from './LandingScreen';
 import ConsentBanner, { hasSeenConsent } from './ConsentBanner';
 import MomentForm from './MomentForm';
 import MessageContent from './MessageContent';
 import YouTubeMomentPicker from './YouTubeMomentPicker';
 import RecommendationCard from './RecommendationCard';
+import OpenerRecord from './OpenerRecord';
 import { getSessionId } from './sessionId';
 import {
   initSession,
@@ -21,6 +21,8 @@ import {
   clearPendingAsk,
   agePendingAsk,
 } from './loreProgress';
+import { FIRST_CONTACT, pickReturnGreeting } from './grooveOpeners';
+import { pickOpenerPair } from './openerPairs';
 import { logEvent } from './supabaseClient';
 import { isTester } from './isTester';
 import './riff-radar.css';
@@ -38,7 +40,10 @@ function getRandomLoadingMessage() {
 }
 
 export default function App() {
-  const [phase, setPhase] = useState(hasSeenLanding() ? 'form' : 'landing');
+  // D-031: no gate before the conversation. There is no landing phase and no
+  // form phase. Groove's opener is the landing page, and it renders instantly
+  // because it is static copy (D-030), not an API call.
+  const [phase, setPhase] = useState('chat');
   const [showConsent, setShowConsent] = useState(!hasSeenConsent());
 
   const [videoLoaded, setVideoLoaded] = useState(false);
@@ -56,6 +61,13 @@ export default function App() {
   const [activePreviewKey, setActivePreviewKey] = useState(null);
   const loggedPreviewKeysRef = useRef(new Set());
   const inputRef = useRef(null);
+
+  // The pair shown this session. Held in a ref so re-renders never reshuffle it
+  // mid-conversation, which would rewrite a moment the user was part of.
+  const openerPairRef = useRef(null);
+  // Counts only USER messages. Arc beats and pool asks are suppressed until
+  // this reaches 2, so turn one is just the opener and one real exchange.
+  const userTurnCountRef = useRef(0);
 
   useEffect(() => {
     const audio = new Audio();
@@ -83,7 +95,7 @@ export default function App() {
     return `${rec.track}::${rec.artist}`;
   }
 
-  function handleTogglePlay(rec) {
+  function handleTogglePlay(rec, source) {
     const audio = audioElRef.current;
     if (!audio) return;
     const key = previewKeyFor(rec);
@@ -101,7 +113,15 @@ export default function App() {
 
     if (!loggedPreviewKeysRef.current.has(key)) {
       loggedPreviewKeysRef.current.add(key);
-      emit('preview_played', { track: rec.track, artist: rec.artist });
+      // `source` distinguishes a preview played off the opener from one played
+      // off a recommendation. Without it, "listened and left" and "got recs and
+      // left" are indistinguishable in the funnel, and they mean very different
+      // things about whether the opener is working.
+      emit('preview_played', {
+        track: rec.track,
+        artist: rec.artist,
+        source: source || 'recommendation',
+      });
     }
   }
 
@@ -113,6 +133,56 @@ export default function App() {
       is_new_day: isNewDay,
       is_returning: isReturning,
     });
+
+    const pair = pickOpenerPair();
+    openerPairRef.current = pair;
+    emit('opener_pair_shown', {
+      pair_id: pair.id,
+      is_first_contact: !isReturning,
+    });
+
+    // Staged, not dumped. The delays are part of the writing: the 2.5s gap
+    // before the third bubble is what makes "I was waiting to see if you'd
+    // speak first" literally true instead of a claim about a pause that never
+    // happened. Rendering all four at once would have the interface lie.
+    const timers = [];
+
+    function pushBubble(id, text, withRecords) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id,
+          role: 'assistant',
+          content: text,
+          recs: [],
+          openerTracks: withRecords ? pair.tracks : null,
+          followUpQuestion: '',
+          buildingRecs: false,
+        },
+      ]);
+    }
+
+    if (!isReturning) {
+      let elapsed = 0;
+      FIRST_CONTACT.forEach((bubble, i) => {
+        elapsed += bubble.delayMs;
+        timers.push(
+          setTimeout(
+            () => pushBubble(`opener-${i}`, bubble.text, !!bubble.showRecords),
+            elapsed
+          )
+        );
+      });
+    } else {
+      // The first-contact script only works once. Replaying it would have
+      // Groove failing to remember the most significant thing that has ever
+      // happened to him (Bible 0c).
+      const greeting = pickReturnGreeting(daysSinceLast);
+      timers.push(setTimeout(() => pushBubble('opener-0', greeting.text, false), 0));
+      timers.push(setTimeout(() => pushBubble('opener-1', greeting.records, true), 1200));
+    }
+
+    return () => timers.forEach(clearTimeout);
   }, []);
 
   function updateMessageById(id, updater) {
@@ -173,6 +243,7 @@ export default function App() {
           // distinct days now, per D-019.
           daysSeen: getDaysSeen(),
           daysSinceLast: getDaysSinceLast(),
+          userTurnCount: userTurnCountRef.current,
           ...getProgressContext(),
         }),
       });
@@ -299,6 +370,15 @@ export default function App() {
   function handleSend() {
     if (!input.trim()) return;
     if (isStreaming) return;
+
+    userTurnCountRef.current += 1;
+    if (userTurnCountRef.current === 1) {
+      emit('first_message_sent', {
+        char_count: input.trim().length,
+        opener_pair_id: openerPairRef.current?.id || null,
+      });
+    }
+
     const newMessages = [
       ...messages,
       { id: `u-${Date.now()}`, role: 'user', content: input },
@@ -308,17 +388,21 @@ export default function App() {
     sendMessage(newMessages);
   }
 
-  function handleOutboundClick({ track, artist, service, url }) {
-    emit('outbound_click', { track, artist, service, url });
-  }
-
-  if (phase === 'landing') {
-    return (
-      <>
-        <LandingScreen onEnter={() => setPhase('form')} />
-        {showConsent && <ConsentBanner onAccept={() => setShowConsent(false)} />}
-      </>
-    );
+  function handleOutboundClick({ track, artist, service, url, source }) {
+    emit('outbound_click', {
+      track,
+      artist,
+      service,
+      url,
+      source: source || 'recommendation',
+    });
+    if (source === 'opener') {
+      emit('opener_track_engaged', {
+        pair_id: openerPairRef.current?.id || null,
+        track,
+        action: 'outbound',
+      });
+    }
   }
 
   const videoColStyle = phase === 'chat' && !videoLoaded ? { display: 'none' } : undefined;
@@ -366,6 +450,7 @@ export default function App() {
                   const hasNothing =
                     !msg.content &&
                     !(msg.recs && msg.recs.length > 0) &&
+                    !(msg.openerTracks && msg.openerTracks.length > 0) &&
                     !msg.followUpQuestion &&
                     !msg.buildingRecs;
                   if (msg.role === 'assistant' && hasNothing) return null;
@@ -413,6 +498,20 @@ export default function App() {
                           <p className="rec-preparing-line">Groove is pulling a few records...</p>
                         )}
 
+                        {msg.openerTracks && msg.openerTracks.length > 0 && (
+                          <div className="opener-records">
+                            {msg.openerTracks.map((t, j) => (
+                              <OpenerRecord
+                                key={`${msg.id}-op-${j}`}
+                                record={t}
+                                isPlaying={activePreviewKey === previewKeyFor(t)}
+                                onTogglePlay={() => handleTogglePlay(t, 'opener')}
+                                onOutboundClick={handleOutboundClick}
+                              />
+                            ))}
+                          </div>
+                        )}
+
                         {msg.role === 'assistant' && msg.recs && msg.recs.length > 0 && (
                           <>
                             <div className="rec-rows">
@@ -421,7 +520,7 @@ export default function App() {
                                   key={`${msg.id || i}-${j}`}
                                   rec={rec}
                                   isPlaying={activePreviewKey === previewKeyFor(rec)}
-                                  onTogglePlay={() => handleTogglePlay(rec)}
+                                  onTogglePlay={() => handleTogglePlay(rec, 'recommendation')}
                                   onOutboundClick={handleOutboundClick}
                                 />
                               ))}

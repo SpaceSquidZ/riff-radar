@@ -496,6 +496,9 @@ export default async function handler(req, res) {
     pendingQuestion = null,
     pendingAskId = null,
     recLanguage = null,
+    // Arc beats and pool asks are suppressed until the user has spoken twice.
+    // Turn one already carries the opener plus a first real exchange.
+    userTurnCount = 99,
   } = req.body;
 
   if (!rawMessages || !Array.isArray(rawMessages)) {
@@ -532,6 +535,7 @@ export default async function handler(req, res) {
       pendingQuestion,
       artistsThisConvo,
       recLanguage,
+      userTurnCount,
     });
 
     // Recompute what the addendum offered, so we can tell the client what to
@@ -539,11 +543,12 @@ export default async function handler(req, res) {
     // the SAME arguments the addendum used, or the server will report an ask
     // that Groove was never given.
     const stage = getActiveStage(daysSeen);
-    const offeredArcBeat = getPendingArcBeat(daysSeen, deliveredArcBeats);
+    const offeredArcBeat = getPendingArcBeat(daysSeen, deliveredArcBeats, userTurnCount);
     const offeredAsk = selectAsk({
       offeredAsks,
       pendingQuestion,
       hasArcBeat: !!offeredArcBeat,
+      userTurnCount,
     });
 
     if (sessionId && stage) {
