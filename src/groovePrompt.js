@@ -509,11 +509,35 @@ export function getLoreAddendum(daysSeen = 0, context = {}) {
     artistsThisConvo = [],
     recLanguage = null,
     userTurnCount = 99,
+    openerPair = null,
   } = context;
 
   let out = '\n\n';
 
   // --- session context, not lore ------------------------------------------
+
+  // BUG THIS FIXES: the opener records render as CARDS, so their titles never
+  // appear in any message's text content. A user saying "I like the second one
+  // you shared" was referring to something Groove had no record of, and he
+  // correctly but uselessly replied that he had no second one.
+  //
+  // The records are session context, not conversation, so they belong here
+  // rather than being stuffed into a fake assistant turn.
+  if (openerPair?.tracks?.length) {
+    const list = openerPair.tracks
+      .map((t, i) => `${i + 1}. "${t.track}" by ${t.artist}${t.year ? ` (${t.year})` : ''}`)
+      .join('\n');
+
+    out += `# What you have on tonight
+Before they said anything, you put these two records on and they are visible on their screen right now:
+
+${list}
+
+If they refer to "the first one", "the second one", "that one you played", or react to either without naming it, THESE are what they mean. Talk about them as things you already had on, not as recommendations you made for them.
+
+${openerPair.thread ? `The reason these two are together, which you would only say if asked: ${openerPair.thread}\n` : ''}
+`;
+  }
 
   if (daysSinceLast !== null && daysSinceLast >= 1) {
     out += `# They have been away

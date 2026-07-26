@@ -264,7 +264,20 @@ export default function App() {
 
     try {
       const sessionId = getSessionId();
-      const apiMessages = newMessages.map(({ role, content }) => ({ role, content }));
+
+      // Strip the opener bubbles out of the history sent to the API.
+      //
+      // Two reasons. First, the Anthropic Messages API expects the first message
+      // to be a user turn, and the opener is up to four consecutive assistant
+      // messages before the user has said anything, which is malformed.
+      //
+      // Second, they carry no information anyway: the record titles render as
+      // cards, so the text is "These are just what I had on" with nothing named.
+      // The records reach Groove properly via openerPair in the system prompt,
+      // where he can actually reason about them.
+      const apiMessages = newMessages
+        .filter((m) => !String(m.id || '').startsWith('opener-'))
+        .map(({ role, content }) => ({ role, content }));
 
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -281,6 +294,7 @@ export default function App() {
           daysSeen: getDaysSeen(),
           daysSinceLast: getDaysSinceLast(),
           userTurnCount: userTurnCountRef.current,
+          openerPair: openerPairRef.current,
           ...getProgressContext(),
         }),
       });
@@ -592,7 +606,10 @@ export default function App() {
 
                 {loading && <p style={{ opacity: 0.6 }}>{loadingMessage}</p>}
 
-                <div style={{ marginTop: '1.5rem', display: 'flex', gap: '8px', maxWidth: '640px', alignItems: 'flex-end' }}>
+                <div
+                  className="chat-input-row"
+                  style={{ marginTop: '1.5rem', display: 'flex', gap: '8px', alignItems: 'flex-end' }}
+                >
                   <textarea
                     ref={inputRef}
                     value={input}

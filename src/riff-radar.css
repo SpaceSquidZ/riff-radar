@@ -761,18 +761,18 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
 
 /* --- Undo Vite's scaffolding defaults ---
    Vite's starter index.css ships:
- 
+
      body { display: flex; place-items: center; }
      #root { max-width: 1280px; margin: 0 auto; text-align: center; }
- 
+
    Both are wrong for a chat layout, and the second one caused a visible bug:
    with only the consent notice on screen the app had little content, so
    `place-items: center` centered the whole block and the input rendered narrow
    and centered. Once Groove's bubbles made the page tall it stretched and
    left-aligned, so the input appeared to jump width the moment he spoke.
- 
+
    The wordmark was the tell: centered before, left-aligned after.
- 
+
    Overriding here rather than editing index.css keeps every layout decision in
    one file, which is also why the dark-theme lock at the top of this file
    exists. !important is deliberate: this must win regardless of load order.
@@ -782,7 +782,7 @@ body {
   place-items: normal !important;
   min-height: 100vh;
 }
- 
+
 #root {
   max-width: none !important;
   width: 100%;
@@ -790,4 +790,246 @@ body {
   padding: 0 !important;
   text-align: left !important;
   display: block !important;
+}
+
+/* ===========================================================================
+   RECOMMENDATION CARDS — cassette label treatment
+   ===========================================================================
+
+   Two failed states preceded this. Pure white cards were the loudest thing on
+   a dark screen, a bright rectangle in a dim room. Then dark cards disappeared
+   into the background entirely and nothing read as an object.
+
+   This lands between them: a warm off-grey stock with paper grain, like the
+   label on a cassette someone typed on. It reads as a physical thing sitting in
+   the room rather than a UI panel, which is the whole point of the
+   receiving-equipment frame. The action buttons stay dark so they read as
+   controls ON the object, not part of it.
+
+   All CSS. RecommendationCard.jsx is untouched.
+   =========================================================================== */
+
+.rec-row {
+  /* Warm paper stock rather than white. The layered gradients are grain: two
+     fine diagonal hatches at very low opacity, which reads as texture at normal
+     zoom without becoming a visible pattern. */
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(0, 0, 0, 0.014) 0px,
+      rgba(0, 0, 0, 0.014) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(0, 0, 0, 0.01) 0px,
+      rgba(0, 0, 0, 0.01) 1px,
+      transparent 1px,
+      transparent 4px
+    ),
+    linear-gradient(168deg, #e8e4d9 0%, #ddd8cb 100%);
+  border: 1px solid #c4bfb0;
+  border-radius: 4px; /* labels have corners, not pills */
+  color: #24231f;
+  padding: 11px 13px;
+  /* Sits ON the dark room rather than glowing out of it. */
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.35) inset,
+              0 2px 6px rgba(0, 0, 0, 0.35);
+  position: relative;
+}
+
+/* The spine: a thin colour edge, like the coloured strip down a tape label. */
+.rec-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: #8d7f66;
+  border-radius: 4px 0 0 4px;
+}
+
+.rec-row-artwork {
+  border-radius: 2px;
+  /* A printed image on a paper label, not a floating thumbnail. */
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.rec-row-artwork-empty {
+  background: #cdc7b7;
+}
+
+/* The connection-type tag, set like something typed onto the label. */
+.rec-pill {
+  background: #24231f;
+  color: #ece8dd;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 2px;
+}
+
+.rec-row-meta {
+  color: #6f6a5c;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.rec-row-title {
+  color: #1c1b18;
+  font-size: 14.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.rec-row-artist {
+  color: #514c42;
+  font-size: 13px;
+}
+
+.rec-row-explanation {
+  color: #57524a;
+  font-size: 12px;
+}
+
+.rec-read-more {
+  color: #6b5f45;
+  font-weight: 500;
+}
+
+/* --- Controls: dark, so they read as hardware on a paper object --- */
+
+.rec-row-play {
+  background: #24231f;
+  border: 1px solid #14130f;
+  color: #ece8dd;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.rec-row-play:hover {
+  background: #34322b;
+}
+
+.rec-icon-link {
+  background: #24231f;
+  border: 1px solid #14130f;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.rec-icon-link:hover {
+  background: #34322b;
+}
+
+/* Service marks keep their brand colour so they stay instantly recognisable,
+   which is the one place brand recognition beats visual consistency. */
+.rec-icon-link svg {
+  filter: none;
+}
+
+/* --- Opener records: the same stock, quieter ---
+   These are records Groove already had on, not recommendations. Same material
+   so they belong to the same world, less contrast so the distinction holds. */
+
+.opener-record {
+  background: linear-gradient(168deg, #35342e 0%, #2c2b26 100%);
+  border: 1px solid #45443c;
+  border-radius: 4px;
+  color: #e4e0d5;
+  position: relative;
+}
+
+.opener-record::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: #5c5749;
+  border-radius: 4px 0 0 4px;
+}
+
+.opener-record-artwork,
+.opener-record-art {
+  border-radius: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+}
+
+.opener-record-title {
+  color: #f0ece1;
+}
+
+.opener-record-artist {
+  color: #a8a294;
+}
+
+.opener-record-meta {
+  color: #7d7768;
+  letter-spacing: 0.02em;
+}
+
+.opener-record-play,
+.opener-record-link {
+  background: #1e1d19;
+  border: 1px solid #14130f;
+  color: #d8d3c6;
+}
+
+.opener-record-play:hover,
+.opener-record-link:hover {
+  background: #2a2924;
+}
+
+/* ===========================================================================
+   CENTERED CONVERSATION COLUMN
+   ===========================================================================
+
+   Option A from the layout decision: the conversation is genuinely centred in
+   the viewport with a fixed max-width, the way Suno and every chat product does
+   it, because centred-with-fixed-width is what makes long typing feel stable.
+
+   This is INCOMPATIBLE with a static left panel, and that was the real choice.
+   A 30% column plus a "centred" chat centres the chat in the remaining 70%,
+   which is the left-of-centre effect that looked wrong. So the panel becomes a
+   drawer that opens OVER the conversation instead of beside it. That also suits
+   the device split better: on desktop it slides, on mobile it is the same
+   drawer rather than a squeezed column.
+   =========================================================================== */
+
+.app-layout {
+  display: block;
+}
+
+.app-layout-content-col {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+/* The wordmark sits with the column rather than at the page edge, so the whole
+   thing reads as one object. */
+.app-logo {
+  max-width: 680px;
+  margin: 0 auto 1.25rem auto;
+}
+
+/* The input matches the column exactly. A narrower input inside a wider column
+   reads as a floating widget rather than part of the same device. */
+.chat-input-row {
+  max-width: 680px !important;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.rec-rows,
+.opener-records,
+.chat-bubble,
+.rec-followup {
+  max-width: 100%;
 }

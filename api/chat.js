@@ -499,6 +499,10 @@ export default async function handler(req, res) {
     // Arc beats and pool asks are suppressed until the user has spoken twice.
     // Turn one already carries the opener plus a first real exchange.
     userTurnCount = 99,
+    // The two records Groove had on when the user arrived. Session context, not
+    // conversation: their titles render as cards and so never appear in any
+    // message's text.
+    openerPair = null,
   } = req.body;
 
   if (!rawMessages || !Array.isArray(rawMessages)) {
@@ -536,6 +540,7 @@ export default async function handler(req, res) {
       artistsThisConvo,
       recLanguage,
       userTurnCount,
+      openerPair,
     });
 
     // Recompute what the addendum offered, so we can tell the client what to
