@@ -758,3 +758,36 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
     opacity: 0.5;
   }
 }
+
+/* --- Undo Vite's scaffolding defaults ---
+   Vite's starter index.css ships:
+ 
+     body { display: flex; place-items: center; }
+     #root { max-width: 1280px; margin: 0 auto; text-align: center; }
+ 
+   Both are wrong for a chat layout, and the second one caused a visible bug:
+   with only the consent notice on screen the app had little content, so
+   `place-items: center` centered the whole block and the input rendered narrow
+   and centered. Once Groove's bubbles made the page tall it stretched and
+   left-aligned, so the input appeared to jump width the moment he spoke.
+ 
+   The wordmark was the tell: centered before, left-aligned after.
+ 
+   Overriding here rather than editing index.css keeps every layout decision in
+   one file, which is also why the dark-theme lock at the top of this file
+   exists. !important is deliberate: this must win regardless of load order.
+*/
+body {
+  display: block !important;
+  place-items: normal !important;
+  min-height: 100vh;
+}
+ 
+#root {
+  max-width: none !important;
+  width: 100%;
+  margin: 0 !important;
+  padding: 0 !important;
+  text-align: left !important;
+  display: block !important;
+}

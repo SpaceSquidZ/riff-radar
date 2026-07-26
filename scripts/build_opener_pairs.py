@@ -25,39 +25,83 @@ from difflib import SequenceMatcher
 
 FALLBACK_STOREFRONTS = ["US", "HK", "TW", "JP", "KR", "CN"]
 
-# pair_id, (song A, artist A), (song B, artist B), internal thread.
-# The thread is NEVER rendered. It exists so the pair coheres, and so Groove can
-# answer if someone asks why these two.
+# pair_id, track A, track B, internal thread.
+#
+# Each track is (query_song, query_artist, display_year, display_genre).
+#
+# WHY YEAR AND GENRE ARE HARDCODED
+# iTunes returns LOCALIZED genre names, so a track that resolves from the TW or
+# HK storefront comes back with a Chinese genre label. "The Kiss" by Judee Sill
+# rendered as "1973 · 搖滾" on an English card, which is a visible bug on the
+# highest-stakes screen in the product.
+#
+# It also returns REISSUE years. Mulatu Astatke's 1969 Ethio-jazz recording came
+# back as 2012 because that is when the compilation shipped. "Yèkèrmo Sèw · 2012"
+# undersells the record badly.
+#
+# These 30 tracks are hand-curated, so the labels should be authored too. iTunes
+# is here for the preview and artwork URLs, which are the parts no human can
+# type from memory.
 PAIRS = [
-    ("p01", ("Tonight", "Sibylle Baier"), ("BTSTU", "Jai Paul"),
+    ("p01",
+     ("Tonight", "Sibylle Baier", "1973", "Folk"),
+     ("BTSTU", "Jai Paul", "2011", "Electronic"),
      "Recordings that escaped. One a home tape lost for thirty years, one a leak."),
-    ("p02", ("\u4f86\u4e0d\u53ca", "Sandee Chan"), ("Cherry-Coloured Funk", "Cocteau Twins"),
+    ("p02",
+     ("\u4f86\u4e0d\u53ca", "Sandee Chan", "1999", "Mandopop"),
+     ("Cherry-Coloured Funk", "Cocteau Twins", "1990", "Dream pop"),
      "Voice used as texture rather than language."),
-    ("p03", ("Caboclo", "Arthur Verocai"), ("Strawberry Letter 23", "Shuggie Otis"),
+    ("p03",
+     ("Caboclo", "Arthur Verocai", "1972", "MPB"),
+     ("Strawberry Letter 23", "Shuggie Otis", "1971", "Psychedelic soul"),
      "Two records that flopped on release and got dug back up decades later."),
-    ("p04", ("Turiya and Ramakrishna", "Alice Coltrane"), ("Blink", "Hiroshi Yoshimura"),
+    ("p04",
+     ("Turiya and Ramakrishna", "Alice Coltrane", "1970", "Spiritual jazz"),
+     ("Blink", "Hiroshi Yoshimura", "1982", "Ambient"),
      "Music that behaves like a room instead of a song."),
-    ("p05", ("Yekermo Sew", "Mulatu Astatke"), ("Obaa Sima", "Ata Kak"),
+    ("p05",
+     ("Yekermo Sew", "Mulatu Astatke", "1969", "Ethio-jazz"),
+     ("Obaa Sima", "Ata Kak", "1994", "Highlife"),
      "Records that reached the West late and by accident."),
-    ("p06", ("Heavy Water/I'd Rather Be Sleeping", "Grouper"), ("Falling", "Julee Cruise"),
+    ("p06",
+     ("Heavy Water/I'd Rather Be Sleeping", "Grouper", "2008", "Slowcore"),
+     ("Falling", "Julee Cruise", "1989", "Dream pop"),
      "Voices kept underwater on purpose."),
-    ("p07", ("Mustt Mustt", "Nusrat Fateh Ali Khan"), ("Doomed", "Moses Sumney"),
+    ("p07",
+     ("Mustt Mustt", "Nusrat Fateh Ali Khan", "1990", "Qawwali"),
+     ("Doomed", "Moses Sumney", "2017", "Art pop"),
      "The voice carrying the entire arrangement alone."),
-    ("p08", ("The Kiss", "Judee Sill"), ("Anything", "Adrianne Lenker"),
+    ("p08",
+     ("The Kiss", "Judee Sill", "1973", "Folk"),
+     ("Anything", "Adrianne Lenker", "2020", "Folk"),
      "One guitar, one voice, forty-seven years apart."),
-    ("p09", ("Echo's Answer", "Broadcast"), ("Love Without Sound", "White Noise"),
+    ("p09",
+     ("Echo's Answer", "Broadcast", "2000", "Electronic"),
+     ("Love Without Sound", "White Noise", "1969", "Early electronic"),
      "Electronics built to sound like memory rather than the future."),
-    ("p10", ("Mystery of Love", "Mr. Fingers"), ("Let It Go", "DJ Rashad"),
+    ("p10",
+     ("Mystery of Love", "Mr. Fingers", "1985", "Deep house"),
+     ("Let It Go", "DJ Rashad", "2013", "Footwork"),
      "Chicago dance music made for being alone, two generations apart."),
-    ("p11", ("Estranha Forma de Vida", "Amalia Rodrigues"), ("De Cara a la Pared", "Lhasa de Sela"),
+    ("p11",
+     ("Estranha Forma de Vida", "Amalia Rodrigues", "1962", "Fado"),
+     ("De Cara a la Pared", "Lhasa de Sela", "1997", "Latin folk"),
      "Loss sung as a form rather than a feeling."),
-    ("p12", ("The Downtown Lights", "The Blue Nile"), ("New Grass", "Talk Talk"),
+    ("p12",
+     ("The Downtown Lights", "The Blue Nile", "1989", "Sophisti-pop"),
+     ("New Grass", "Talk Talk", "1991", "Art rock"),
      "Records that took years to make. Production as patience."),
-    ("p13", ("Sports Men", "Haruomi Hosono"), ("That's Us/Wild Combination", "Arthur Russell"),
+    ("p13",
+     ("Sports Men", "Haruomi Hosono", "1982", "City pop"),
+     ("That's Us/Wild Combination", "Arthur Russell", "1986", "Experimental pop"),
      "Pop music by people who couldn't stop experimenting, both found late."),
-    ("p14", ("Amandrai", "Ali Farka Toure"), ("Poor Boy", "John Fahey"),
+    ("p14",
+     ("Amandrai", "Ali Farka Toure", "1994", "Desert blues"),
+     ("Poor Boy", "John Fahey", "1959", "American primitive"),
      "The blues traveling in both directions at once."),
-    ("p15", ("Old Justice", "Ka"), ("Home Is Where the Hatred Is", "Gil Scott-Heron"),
+    ("p15",
+     ("Old Justice", "Ka", "2020", "Hip-hop"),
+     ("Home Is Where the Hatred Is", "Gil Scott-Heron", "1971", "Spoken-word soul"),
      "New York voices talking low over almost nothing."),
 ]
 
@@ -79,8 +123,12 @@ def search(term, country):
         return None
 
 
-def resolve(song, artist):
-    """Everything a card needs, or None if unresolvable in any storefront."""
+def resolve(song, artist, display_year, display_genre):
+    """Everything a card needs, or None if unresolvable in any storefront.
+
+    `display_year` and `display_genre` are authored, not scraped. See the note
+    on PAIRS above for why.
+    """
     for country in FALLBACK_STOREFRONTS:
         results = search(f"{artist} {song}", country)
         time.sleep(0.3)  # polite to an undocumented, unofficially limited API
@@ -102,10 +150,14 @@ def resolve(song, artist):
 
         art = best.get("artworkUrl100") or ""
         return {
+            # Title and artist come from the catalog so they match what a user
+            # would see in Apple Music, including diacritics.
             "track": best.get("trackName") or song,
             "artist": best.get("artistName") or artist,
-            "year": (best.get("releaseDate") or "")[:4] or None,
-            "genre": best.get("primaryGenreName"),
+            # Year and genre are AUTHORED. iTunes gives localized genres and
+            # reissue years, both of which render wrong.
+            "year": display_year,
+            "genre": display_genre,
             "previewUrl": best.get("previewUrl"),
             # iTunes returns 100x100 by default, which is soft on retina. The
             # URL pattern is predictable, so ask for a real size.
@@ -193,7 +245,8 @@ def main():
         rb = resolve(*b)
 
         if not ra or not rb:
-            failures.append((pair_id, a if not ra else b))
+            failed = a if not ra else b
+            failures.append((pair_id, (failed[0], failed[1])))
             print("FAIL")
             continue
 
