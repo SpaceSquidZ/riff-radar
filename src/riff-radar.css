@@ -708,3 +708,53 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
     max-width: 100%;
   }
 }
+
+/* --- Signal acquisition ---
+   Shown while the channel pulls the next bubble in. Deliberately NOT three
+   bouncing dots: that is a chat-app typing indicator, and per the design notes
+   every element should be answerable to "what part of the apparatus is this."
+
+   This reads as a signal meter resolving out of noise. Blocks brighten in
+   sequence with irregular timing, because a clean even pulse would look like a
+   progress bar rather than reception.
+*/
+.signal-acquiring {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 22px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border-top-left-radius: 4px;
+  background: #22242d;
+  box-sizing: content-box;
+}
+
+.signal-acquiring span {
+  display: block;
+  width: 3px;
+  background: #6f7380;
+  border-radius: 1px;
+  animation: signal-pulse 1.25s ease-in-out infinite;
+}
+
+.signal-acquiring span:nth-child(1) { height: 6px;  animation-delay: 0s;    }
+.signal-acquiring span:nth-child(2) { height: 11px; animation-delay: 0.13s; }
+.signal-acquiring span:nth-child(3) { height: 8px;  animation-delay: 0.31s; }
+.signal-acquiring span:nth-child(4) { height: 14px; animation-delay: 0.19s; }
+.signal-acquiring span:nth-child(5) { height: 7px;  animation-delay: 0.44s; }
+.signal-acquiring span:nth-child(6) { height: 10px; animation-delay: 0.26s; }
+
+@keyframes signal-pulse {
+  0%, 100% { opacity: 0.22; transform: scaleY(0.7); }
+  50%      { opacity: 0.85; transform: scaleY(1);   }
+}
+
+/* Someone who has asked for less motion should not get a pulsing meter. Keep
+   the shape so the layout does not jump, drop the animation. */
+@media (prefers-reduced-motion: reduce) {
+  .signal-acquiring span {
+    animation: none;
+    opacity: 0.5;
+  }
+}

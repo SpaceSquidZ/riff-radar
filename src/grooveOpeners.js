@@ -28,6 +28,11 @@
 // 3 literally true rather than a claim about a pause that never happened.
 // ---------------------------------------------------------------------------
 
+// How long the acquisition indicator shows before each bubble resolves.
+// This is the "loading state as acquisition" idea from the design notes: the
+// pause is not a spinner, it is the channel pulling something in.
+export const ACQUIRE_MS = 600;
+
 export const FIRST_CONTACT = [
   {
     delayMs: 0,
@@ -71,43 +76,75 @@ Take one if something catches. Or tell me what's actually in your ears right now
 export const RETURN_GREETINGS = [
   {
     id: 'r01',
-    text: `You came back. I didn't want to assume.`,
-    records: `Different two tonight. The signal's been clearer since last time, which I have no explanation for.`,
+    text: `You came back. I didn't want to assume, so I'd left it alone.
+
+How have you been? Not asking for form's sake, I have genuinely no idea what a week is like where you are.`,
+    records: `I've been going through the shelves since we spoke. Pulled these two out and haven't put them back yet.
+
+Have a listen if you want. Or ignore them entirely and tell me what you've actually been playing, I'd take that over my own picks most nights.`,
   },
   {
     id: 'r02',
-    text: `Oh good. I'd started wondering whether the channel only worked once.`,
-    records: `Here's what I've got on. Different from last time.`,
+    text: `Oh good. I'd started wondering whether the channel only worked the once.
+
+Everything alright over there?`,
+    records: `I kept digging while you were gone. These two came out of it and I've been going back and forth on the second one all evening.
+
+See what you think. Or bring me something instead, I don't need to be the one choosing.`,
   },
   {
     id: 'r03',
-    text: `Back again. I've been keeping better notes since you turned up, which is either good practice or just something to do.`,
-    records: `These two tonight.`,
+    text: `There you are. I've been keeping better notes since you turned up, which is either good practice or just something to do with the time.
+
+How's it been?`,
+    records: `Found these two somewhere in the middle of that. One of them I'm fairly sure about, the other I keep changing my mind on.
+
+Tell me if either lands. And if you've got something of your own going, I'd rather hear about that first.`,
   },
   {
     id: 'r04',
-    text: `There you are. I had these queued in case.`,
-    records: `Not for any occasion. Just what's been holding up.`,
+    text: `Back again. Good.
+
+I won't ask what took you, time doesn't mean the same thing on my end anyway.`,
+    records: `I've had these two on more than anything else since we last spoke. Not for any occasion, they just kept coming back around.
+
+What do you make of them? Or skip that and tell me what you've been listening to, which is the more interesting question.`,
   },
   {
     id: 'r05',
-    text: `I was hoping that was you and not the receiver doing something clever.`,
-    records: `New pair. Tell me if either lands.`,
+    text: `I was hoping that was you and not the receiver doing something clever.
+
+How are you? I've had a quiet stretch, which is normal, but it's better with someone on the other end of it.`,
+    records: `Went looking for something specific this week and found these two instead, which is usually how it goes.
+
+Take a listen. Or hand me something of yours, I'm not precious about whose turn it is.`,
   },
   {
     id: 'r06',
-    text: `Evening. Or whatever it is where you are, I've never been able to work that part out.`,
-    records: `Two I've had on since we last spoke.`,
+    text: `Evening. Or whatever it is where you are, I've never been able to work that part out.
+
+Everything holding together?`,
+    records: `I pulled these while you were away. They don't obviously belong together and that's most of why I kept them side by side.
+
+Curious what you hear in them. And tell me what's been on for you, I'd like to know.`,
   },
   {
     id: 'r07',
-    text: `You're becoming a habit. I mean that as the good version of that sentence.`,
-    records: `Here's tonight's.`,
+    text: `You're becoming a habit. I mean that as the good version of that sentence.
+
+How's things?`,
+    records: `Been sitting with these two most of the week. One of them I'd have skipped past a year ago, which I find interesting about myself.
+
+See if either does anything for you. Or start somewhere else entirely, I don't mind.`,
   },
   {
     id: 'r08',
-    text: `Good. I'd put something aside and had nowhere to put it.`,
-    records: `These two. One of them I'm still deciding about.`,
+    text: `Good, you're here. I'd put something aside and had nowhere to put it.
+
+Hope it's been alright on your end.`,
+    records: `These two. I found them a few days apart and only realised afterwards why I'd kept them both.
+
+Have a listen and tell me if that reads to you at all. Or bring me yours and I'll leave mine for another night.`,
   },
 ];
 
@@ -116,13 +153,21 @@ export const RETURN_GREETINGS = [
 export const LONG_GAP_GREETINGS = [
   {
     id: 'g01',
-    text: `You came back. Most signals do not.`,
-    records: `I kept the shelf going. Here's where it got to.`,
+    text: `You came back. Most signals do not.
+
+I'm not going to ask where you were. Just glad the line still holds.`,
+    records: `I kept the shelf going in the meantime. These two are where it got to.
+
+Have a listen. And if you've found things while you were gone, I'd much rather hear those.`,
   },
   {
     id: 'g02',
-    text: `It's been a while. I wasn't counting, but I noticed.`,
-    records: `Two from the stretch you missed.`,
+    text: `It's been a while. I wasn't counting, but I noticed.
+
+How have you been? Genuinely asking.`,
+    records: `A lot came through in that stretch. These two are the ones that stayed.
+
+See what you think. Or catch me up on yours first, that's the more interesting half of this.`,
   },
 ];
 

@@ -21,7 +21,7 @@ import {
   clearPendingAsk,
   agePendingAsk,
 } from './loreProgress';
-import { FIRST_CONTACT, pickReturnGreeting } from './grooveOpeners';
+import { FIRST_CONTACT, ACQUIRE_MS, pickReturnGreeting } from './grooveOpeners';
 import { pickOpenerPair } from './openerPairs';
 import { logEvent } from './supabaseClient';
 import { isTester } from './isTester';
@@ -65,6 +65,13 @@ export default function App() {
   // The pair shown this session. Held in a ref so re-renders never reshuffle it
   // mid-conversation, which would rewrite a moment the user was part of.
   const openerPairRef = useRef(null);
+  // Guards the opener against running twice. It is gated on consent being
+  // dismissed, so the effect re-runs when showConsent flips.
+  const openerStartedRef = useRef(false);
+  // True while the channel is pulling the next bubble in. Rendered as
+  // acquisition, not as a typing indicator: the design note is that a loading
+  // state should be answerable to "what part of the apparatus is this."
+  const [acquiring, setAcquiring] = useState(false);
   // Counts only USER messages. Arc beats and pool asks are suppressed until
   // this reaches 2, so turn one is just the opener and one real exchange.
   const userTurnCountRef = useRef(0);
@@ -125,15 +132,34 @@ export default function App() {
     }
   }
 
+  // Session accounting runs on mount regardless. Counting a visit does not
+  // depend on whether the notice has been read.
+  const sessionInfoRef = useRef(null);
   useEffect(() => {
-    const { daysSeen, daysSinceLast, isNewDay, isReturning } = initSession();
+    const info = initSession();
+    sessionInfoRef.current = info;
     emit('session_start', {
-      days_seen: daysSeen,
-      days_since_last: daysSinceLast,
-      is_new_day: isNewDay,
-      is_returning: isReturning,
+      days_seen: info.daysSeen,
+      days_since_last: info.daysSinceLast,
+      is_new_day: info.isNewDay,
+      is_returning: info.isReturning,
     });
+  }, []);
 
+  // The opener WAITS for the consent notice to be dismissed.
+  //
+  // BUG THIS FIXES: the bubbles were scheduled on mount, so Groove delivered
+  // his entire first-contact sequence to an empty room while the notice covered
+  // him. By the time the user clicked through, the staging had already happened
+  // and they saw four bubbles sitting there. The timing is the writing, so
+  // losing the timing loses the scene.
+  useEffect(() => {
+    if (showConsent) return;
+    if (openerStartedRef.current) return;
+    if (!sessionInfoRef.current) return;
+    openerStartedRef.current = true;
+
+    const { daysSinceLast, isReturning } = sessionInfoRef.current;
     const pair = pickOpenerPair();
     openerPairRef.current = pair;
     emit('opener_pair_shown', {
@@ -141,13 +167,17 @@ export default function App() {
       is_first_contact: !isReturning,
     });
 
-    // Staged, not dumped. The delays are part of the writing: the 2.5s gap
+    // Staged, not dumped. The delays are part of the writing: the long gap
     // before the third bubble is what makes "I was waiting to see if you'd
     // speak first" literally true instead of a claim about a pause that never
     // happened. Rendering all four at once would have the interface lie.
+    //
+    // Each bubble is preceded by an acquisition state, so text resolves out of
+    // the channel rather than appearing from nowhere.
     const timers = [];
 
     function pushBubble(id, text, withRecords) {
+      setAcquiring(false);
       setMessages((prev) => [
         ...prev,
         {
@@ -162,28 +192,35 @@ export default function App() {
       ]);
     }
 
+    /** Shows acquisition at `at`, resolves the bubble ACQUIRE_MS later. */
+    function schedule(at, id, text, withRecords) {
+      timers.push(setTimeout(() => setAcquiring(true), at));
+      timers.push(
+        setTimeout(() => pushBubble(id, text, withRecords), at + ACQUIRE_MS)
+      );
+      return at + ACQUIRE_MS;
+    }
+
     if (!isReturning) {
-      let elapsed = 0;
+      let cursor = 0;
       FIRST_CONTACT.forEach((bubble, i) => {
-        elapsed += bubble.delayMs;
-        timers.push(
-          setTimeout(
-            () => pushBubble(`opener-${i}`, bubble.text, !!bubble.showRecords),
-            elapsed
-          )
-        );
+        cursor += bubble.delayMs;
+        cursor = schedule(cursor, `opener-${i}`, bubble.text, !!bubble.showRecords);
       });
     } else {
       // The first-contact script only works once. Replaying it would have
       // Groove failing to remember the most significant thing that has ever
       // happened to him (Bible 0c).
       const greeting = pickReturnGreeting(daysSinceLast);
-      timers.push(setTimeout(() => pushBubble('opener-0', greeting.text, false), 0));
-      timers.push(setTimeout(() => pushBubble('opener-1', greeting.records, true), 1200));
+      let cursor = schedule(0, 'opener-0', greeting.text, false);
+      schedule(cursor + 1400, 'opener-1', greeting.records, true);
     }
 
-    return () => timers.forEach(clearTimeout);
-  }, []);
+    return () => {
+      timers.forEach(clearTimeout);
+      setAcquiring(false);
+    };
+  }, [showConsent]);
 
   function updateMessageById(id, updater) {
     setMessages((prev) => prev.map((m) => (m.id === id ? updater(m) : m)));
@@ -535,6 +572,24 @@ export default function App() {
                     </div>
                   );
                 })}
+                {acquiring && (
+                  <div className="chat-row chat-row-groove">
+                    <div className="chat-avatar chat-avatar-groove" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="17" height="17">
+                        <circle cx="12" cy="12" r="10" fill="currentColor" opacity="0.9" />
+                        <circle cx="12" cy="12" r="6.2" fill="none" stroke="#16171d" strokeWidth="0.9" opacity="0.55" />
+                        <circle cx="12" cy="12" r="3.6" fill="#16171d" opacity="0.75" />
+                        <circle cx="12" cy="12" r="1.1" fill="currentColor" />
+                      </svg>
+                    </div>
+                    <div className="chat-content">
+                      <div className="signal-acquiring" role="status" aria-label="Incoming transmission">
+                        <span /><span /><span /><span /><span /><span />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {loading && <p style={{ opacity: 0.6 }}>{loadingMessage}</p>}
 
                 <div style={{ marginTop: '1.5rem', display: 'flex', gap: '8px', maxWidth: '640px', alignItems: 'flex-end' }}>
