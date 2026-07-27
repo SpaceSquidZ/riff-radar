@@ -11,6 +11,7 @@ import {
   getDaysSeen,
   getVisitorId,
   getDaysSinceLast,
+  markEngaged,
 } from './sessionCount';
 import {
   getProgressContext,
@@ -424,6 +425,10 @@ export default function App() {
 
     userTurnCountRef.current += 1;
     if (userTurnCountRef.current === 1) {
+      // Marks this visitor as having actually talked to Groove, which is what
+      // makes them "returning" next time. A page load alone must not spend the
+      // first-contact script.
+      markEngaged();
       emit('first_message_sent', {
         char_count: input.trim().length,
         opener_pair_id: openerPairRef.current?.id || null,

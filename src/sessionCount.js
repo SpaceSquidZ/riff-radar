@@ -28,6 +28,8 @@
 // acceptable pre-accounts and is exactly what D-019 defers to November.
 
 const VISITOR_KEY = 'rr_visitor_id';
+// Set the first time the user actually SENDS a message, not merely loads.
+const ENGAGED_KEY = 'rr_has_engaged';
 const DAYS_KEY = 'rr_days_seen';
 const LAST_DAY_KEY = 'rr_last_day';
 const LAST_SEEN_KEY = 'rr_last_seen';
@@ -110,8 +112,26 @@ export function initSession() {
     daysSeen: getDaysSeen(),
     daysSinceLast,
     isNewDay,
-    isReturning: !isFirstEver,
+    // "Returning" means they have TALKED to Groove before, not merely loaded
+    // the page before.
+    //
+    // BUG THIS FIXES: this was `!isFirstEver`, which keyed off whether a
+    // visitor id existed. Anyone who opened the link once and closed it
+    // permanently lost the first-contact script and got the returning greeting
+    // instead, so the single best-written thing in the product could be spent
+    // on an idle page load. A real first tester hit exactly this.
+    isReturning: hasEngaged(),
   };
+}
+
+/** True once the user has sent at least one message, ever. */
+export function hasEngaged() {
+  return safeGet(ENGAGED_KEY) === '1';
+}
+
+/** Call when the user sends their first message. Idempotent. */
+export function markEngaged() {
+  if (!hasEngaged()) safeSet(ENGAGED_KEY, '1');
 }
 
 export function getDaysSeen() {
