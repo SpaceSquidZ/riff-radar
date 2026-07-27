@@ -4,19 +4,53 @@
 //
 // WHY THIS IS A SEPARATE COMPONENT FROM RecommendationCard
 // D-025: "two is what someone actually has on; three is a set assembled for
-// you." If opener records look identical to recommendation cards, that
-// distinction collapses and the user reads the opener as recs they did not ask
-// for. Different object, different treatment.
+// you." What makes these different is the ABSENCE of a claim: no connection-type
+// pill, no one-sentence explanation, because Groove is not explaining why these
+// two go together. The internal pair thread is never rendered.
 //
-// Concretely it drops the two things that make a rec card a rec card: the
-// connection-type pill and the one-sentence explanation. Groove is not
-// explaining why these two go together, because he is not recommending them.
-// The internal `thread` behind the pair is never rendered.
-//
-// Deliberately keeps the outbound links. They are the most complimented part of
-// the product in feedback, and the star/crate replacement is Wave 3. Rationing
-// them now on a guessed cadence would trade a liked feature for an untested
-// hypothesis.
+// Everything else now matches the rec card exactly, including the service icons.
+// The earlier version used monochrome glyphs, which made the opener read as a
+// lesser version of the real thing rather than the same kind of object.
+
+function SpotifyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="11" fill="#1DB954" />
+      <path
+        d="M6.5 9.2c3.6-1 7.6-.7 10.6 1.1M7.2 12.2c3-.8 6.3-.5 8.8 1M7.9 15.1c2.4-.6 5-.4 7 .8"
+        stroke="#fff"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        fill="none"
+      />
+    </svg>
+  );
+}
+
+function AppleMusicIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+      <rect x="1" y="1" width="22" height="22" rx="5" fill="#FA243C" />
+      <path
+        d="M15.5 6.4l-6 1.3v6.9a1.9 1.9 0 1 0 1.2 1.8V9.9l4.8-1v4.3a1.9 1.9 0 1 0 1.2 1.8V6.4z"
+        fill="#fff"
+      />
+    </svg>
+  );
+}
+
+function PlayIcon({ playing }) {
+  return playing ? (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+      <rect x="7" y="6" width="3.5" height="12" rx="1" fill="currentColor" />
+      <rect x="13.5" y="6" width="3.5" height="12" rx="1" fill="currentColor" />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+      <path d="M8 5.5v13l10-6.5-10-6.5z" fill="currentColor" />
+    </svg>
+  );
+}
 
 function spotifySearchUrl(track, artist) {
   // No OAuth, no API, no quota (D-003). If Spotify ever revokes anything, this
@@ -25,13 +59,12 @@ function spotifySearchUrl(track, artist) {
 }
 
 export default function OpenerRecord({ record, isPlaying, onTogglePlay, onOutboundClick }) {
-  const { track, artist, year, genre, artworkUrl, trackViewUrl } = record;
+  const { track, artist, year, genre, artworkUrl, trackViewUrl, previewUrl } = record;
   const spotifyUrl = spotifySearchUrl(track, artist);
+  const metaLine = [year, genre].filter(Boolean).join(' \u00b7 ');
 
   function handleOutbound(service, url) {
-    if (onOutboundClick) {
-      onOutboundClick({ track, artist, service, url, source: 'opener' });
-    }
+    onOutboundClick?.({ track, artist, service, url, source: 'opener' });
   }
 
   return (
@@ -39,37 +72,27 @@ export default function OpenerRecord({ record, isPlaying, onTogglePlay, onOutbou
       {artworkUrl ? (
         <img className="opener-record-art" src={artworkUrl} alt="" loading="lazy" />
       ) : (
-        <div className="opener-record-art opener-record-art-empty" />
+        <div className="opener-record-art opener-record-art-empty" aria-hidden="true" />
       )}
 
       <div className="opener-record-body">
         <p className="opener-record-title">{track}</p>
         <p className="opener-record-artist">{artist}</p>
-        {(year || genre) && (
-          <p className="opener-record-meta">
-            {[year, genre].filter(Boolean).join(' · ')}
-          </p>
-        )}
+        {metaLine && <p className="opener-record-meta">{metaLine}</p>}
       </div>
 
       <div className="opener-record-actions">
-        <button
-          className="opener-record-play"
-          onClick={onTogglePlay}
-          aria-label={isPlaying ? `Pause ${track}` : `Play ${track}`}
-          type="button"
-        >
-          {isPlaying ? (
-            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-              <rect x="6" y="5" width="4" height="14" fill="currentColor" />
-              <rect x="14" y="5" width="4" height="14" fill="currentColor" />
-            </svg>
-          ) : (
-            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-              <path d="M8 5v14l11-7z" fill="currentColor" />
-            </svg>
-          )}
-        </button>
+        {previewUrl && (
+          <button
+            className="opener-record-play"
+            onClick={onTogglePlay}
+            aria-label={isPlaying ? 'Pause preview' : 'Play 30 second preview'}
+            title={isPlaying ? 'Pause preview' : 'Play 30s preview'}
+            type="button"
+          >
+            <PlayIcon playing={isPlaying} />
+          </button>
+        )}
 
         {trackViewUrl && (
           <a
@@ -79,13 +102,9 @@ export default function OpenerRecord({ record, isPlaying, onTogglePlay, onOutbou
             rel="noopener noreferrer"
             onClick={() => handleOutbound('apple_music', trackViewUrl)}
             aria-label={`Open ${track} in Apple Music`}
+            title="Apple Music"
           >
-            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-              <path
-                d="M12 3v10.55A4 4 0 1014 17V7h4V3z"
-                fill="currentColor"
-              />
-            </svg>
+            <AppleMusicIcon />
           </a>
         )}
 
@@ -96,17 +115,9 @@ export default function OpenerRecord({ record, isPlaying, onTogglePlay, onOutbou
           rel="noopener noreferrer"
           onClick={() => handleOutbound('spotify', spotifyUrl)}
           aria-label={`Search ${track} on Spotify`}
+          title="Spotify"
         >
-          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-            <circle cx="12" cy="12" r="10" fill="currentColor" opacity="0.15" />
-            <path
-              d="M7 9.5c3.5-1 7.5-.6 10 1M7.5 12.5c3-.8 6.2-.4 8.3 1M8 15.4c2.4-.6 4.9-.3 6.6.8"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              fill="none"
-            />
-          </svg>
+          <SpotifyIcon />
         </a>
       </div>
     </div>
