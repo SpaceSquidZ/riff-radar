@@ -1171,3 +1171,13 @@ body {
 .opener-record {
   padding-bottom: 15px;
 }
+
+/* DISTANT is a tag, not a type (D-022): far in language, geography, or era,
+   but still carrying a real connection underneath. Styled as a lighter,
+   outlined stamp so it reads as a modifier on the connection type rather than
+   competing with it. */
+.rec-pill-distant {
+  background: transparent;
+  color: #4a453b;
+  border: 1px solid #a9a294;
+}

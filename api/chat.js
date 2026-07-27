@@ -55,7 +55,7 @@ const HOLDBACK_CHARS = 24;
 
 function extractStructuredData(replyText) {
   const empty = {
-    recs: [],
+    candidates: [],
     followUpQuestion: '',
     arcBeatDelivered: false,
     askOffered: false,
@@ -103,7 +103,12 @@ function extractStructuredData(replyText) {
       : replyText.slice(0, firstMarkerIdx).trimEnd();
 
   return {
-    recs: Array.isArray(parsed.recs) ? parsed.recs : [],
+    // v2b: six ranked candidates. Array order is Groove's own ranking.
+    candidates: Array.isArray(parsed.candidates)
+      ? parsed.candidates
+      : Array.isArray(parsed.recs)
+      ? parsed.recs // tolerate the v2a shape during rollout
+      : [],
     followUpQuestion:
       typeof parsed.followUpQuestion === 'string' ? parsed.followUpQuestion : '',
     arcBeatDelivered: parsed.arcBeatDelivered === true,
@@ -165,20 +170,25 @@ EVERY response ends with exactly ONE metadata comment on its own line, after eve
 else. Which one depends on whether you gave recommendations.
 
 ## A. Turns WITH recommendations
-<!--RIFF_RADAR_RECS:{"recs":[{"track":"Song Title","artist":"Artist Name","matchAxis":"Structural twin","genre":"Genre tag","region":"Country of origin","explanation":"One sentence, 20 words or fewer, on the musical link."},{"track":"...","artist":"...","matchAxis":"Adjacent genre","genre":"...","region":"...","explanation":"..."},{"track":"...","artist":"...","matchAxis":"Surprise pick","genre":"...","region":"...","explanation":"..."}],"followUpQuestion":"Your closing beat.","arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
+Exactly SIX candidates, ranked best first. Array order IS the ranking.
+<!--RIFF_RADAR_RECS:{"candidates":[{"track":"Song Title","artist":"Artist Name","connectionType":"same_hand","distant":false,"tier":"scene","genre":"Genre tag","region":"Country of origin","explanation":"One sentence, 20 words or fewer, naming the connection concretely."}],"followUpQuestion":"Your closing beat.","arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
 
 ## B. Turns WITHOUT recommendations (pure conversation)
 <!--RIFF_RADAR_META:{"arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
 
 Field rules:
 
-"matchAxis" must be exactly one of: "Structural twin", "Adjacent genre", "Surprise pick".
+"candidates" MUST contain exactly six objects, in your own order of preference, best first. The app validates all six and surfaces the best three that survive. Rank honestly: ordering is logged and tested against engagement.
 
-"region" is the artist's country of origin as a plain English name ("Brazil", "Nigeria",
-"Japan", "France", "USA", "UK"). This routes validation to the right regional catalog, so
-be accurate. Use "USA" if unsure or the artist is American.
+"connectionType" must be exactly one of: "same_hand", "lineage", "same_move", "same_scene", "same_mechanism". Spread the six across at least FOUR different types so the app can pick three distinct ones after validation drops some.
 
-"explanation" MUST be exactly one sentence, 20 words or fewer, plain text, no markdown.
+"distant" is a boolean tag, not a type. True when the track is far in language, geography, or era. It must still carry a real connection type underneath.
+
+"tier" is "scene" or "wide". At least four of six must be "scene". No more than two "wide". Judge the TRACK, not the artist: a famous artist's overlooked record is "scene", a standard covered by everyone is "wide" regardless of who performed it.
+
+"region" is the artist's country of origin as a plain English name ("Brazil", "Nigeria", "Japan", "France", "USA", "UK"). This routes validation to the right regional catalog, so be accurate. Use "USA" if unsure.
+
+"explanation" MUST be exactly one sentence, 20 words or fewer, plain text, no markdown. Name the connection concretely: who the shared producer is, which move recurs, what the mechanism does.
 
 "followUpQuestion" is your CLOSING BEAT, not a menu. Two things in order:
   1. ONE warm or curious sentence about THE USER or THE MOMENT THEY SHARED, not about a
@@ -486,6 +496,84 @@ async function streamClaudeReply({ messages, systemBlocks, res }) {
   return fullText;
 }
 
+
+// ---------------------------------------------------------------------------
+// CANDIDATE SELECTION (D-023)
+//
+// Walks Groove's own ranking top-down and takes a candidate unless it violates
+// a set constraint. "Best" is his editorial judgment, not a score we computed.
+//
+// Deliberately NOT a scoring heuristic. A heuristic would be quietly rebuilding
+// a ranking algorithm, which is precisely what D-009 says this product does not
+// do. The constraints are a filter that guarantees variety; the taste is his.
+//
+// Auditable by design: rank is logged alongside engagement, so we can later test
+// whether rank-1 picks actually outperform rank-3. If they do not, ordering is
+// noise and this whole function collapses to "take the first three that
+// validate." That test is a strong candidate for the documented data-driven
+// iteration the case study needs.
+// ---------------------------------------------------------------------------
+
+const MAX_SURFACED = 3;
+const MAX_WIDE_SURFACED = 1;
+
+function normalizeArtistKey(name) {
+  return (name || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+/**
+ * @param {Array} validated - candidates in Groove's rank order, each carrying
+ *   `itunesValidation` and a `_rank` index.
+ * @param {string[]} priorArtists - artists already recommended this conversation
+ * @param {object|null} sourceTrack - what the user brought
+ */
+function selectSurfaced(validated, priorArtists = [], sourceTrack = null) {
+  const takenTypes = new Set();
+  const takenArtists = new Set(priorArtists.map(normalizeArtistKey));
+  if (sourceTrack?.artist) takenArtists.add(normalizeArtistKey(sourceTrack.artist));
+
+  const surfaced = [];
+  const skipped = [];
+  let wideCount = 0;
+
+  for (const c of validated) {
+    if (surfaced.length >= MAX_SURFACED) break;
+
+    let reason = null;
+    if (c.itunesValidation === 'not_found') reason = 'validation_failed';
+    else if (takenArtists.has(normalizeArtistKey(c.artist))) reason = 'artist_repeat';
+    else if (takenTypes.has(c.connectionType)) reason = 'type_taken';
+    else if (c.tier === 'wide' && wideCount >= MAX_WIDE_SURFACED) reason = 'wide_quota';
+
+    if (reason) {
+      skipped.push({ track: c.track, artist: c.artist, rank: c._rank, reason });
+      continue;
+    }
+
+    surfaced.push(c);
+    takenTypes.add(c.connectionType);
+    takenArtists.add(normalizeArtistKey(c.artist));
+    if (c.tier === 'wide') wideCount += 1;
+  }
+
+  // Relaxation pass. If constraints were strict enough to leave the user with
+  // one or two cards, that is the exact failure six candidates exist to prevent.
+  // Better a second card of the same connection type than a lonely single.
+  if (surfaced.length < MAX_SURFACED) {
+    for (const c of validated) {
+      if (surfaced.length >= MAX_SURFACED) break;
+      if (surfaced.includes(c)) continue;
+      if (c.itunesValidation === 'not_found') continue;
+      if (takenArtists.has(normalizeArtistKey(c.artist))) continue;
+
+      surfaced.push(c);
+      takenArtists.add(normalizeArtistKey(c.artist));
+    }
+  }
+
+  return { surfaced, skipped };
+}
+
 function logEventSafe(sessionId, eventType, payload, isTester = false) {
   if (!sessionId) return;
   const withFlag = isTester ? { ...payload, is_tester: true } : payload;
@@ -618,7 +706,7 @@ export default async function handler(req, res) {
     const rawReplyText = await streamClaudeReply({ messages, systemBlocks, res });
 
     const {
-      recs,
+      candidates,
       followUpQuestion,
       arcBeatDelivered,
       askOffered,
@@ -628,53 +716,100 @@ export default async function handler(req, res) {
 
     let enrichedRecs = [];
 
-    if (recs.length > 0) {
+    if (candidates.length > 0) {
       const languageHint = clientLanguageHint || detectLanguageHint(messages);
-      const kept = [];
-      const dropped = [];
 
-      await Promise.all(
-        recs.map(async (rec) => {
-          const { status, enriched } = await validateOneTrack(rec, languageHint);
-          const enrichedRec = {
-            ...rec,
+      if (sessionId) {
+        logEventSafe(
+          sessionId,
+          'rec_candidates_generated',
+          {
+            candidate_count: candidates.length,
+            types: candidates.map((c) => c.connectionType),
+            tiers: candidates.map((c) => c.tier),
+            distant_count: candidates.filter((c) => c.distant).length,
+          },
+          isTester
+        );
+      }
+
+      // Validate ALL candidates in parallel, then select.
+      //
+      // This costs the progressive card reveal that v2a had, where each card
+      // appeared the moment its own lookup resolved. Selection needs the whole
+      // set: a lower-ranked candidate resolving first must not take a slot the
+      // higher-ranked one deserves. The wait is now bounded by the slowest of
+      // six rather than the slowest of three, which the Supabase-backed iTunes
+      // cache should mostly absorb.
+      const validated = await Promise.all(
+        candidates.map(async (c, i) => {
+          const { status, enriched } = await validateOneTrack(c, languageHint);
+          return {
+            ...c,
+            _rank: i + 1,
             itunesValidation: status,
             previewUrl: enriched?.previewUrl ?? null,
             artworkUrl: enriched?.artworkUrl ?? null,
             trackViewUrl: enriched?.trackViewUrl ?? null,
             releaseYear: enriched?.releaseYear ?? null,
           };
-
-          if (status !== 'not_found') {
-            kept.push(enrichedRec);
-            res.write(JSON.stringify({ type: 'rec_ready', rec: enrichedRec }) + '\n');
-          } else {
-            dropped.push(enrichedRec);
-          }
         })
       );
 
-      if (sessionId && dropped.length > 0) {
+      const priorArtists = previousRecommendations.map((r) => r.artist).filter(Boolean);
+      const { surfaced, skipped } = selectSurfaced(validated, priorArtists, sourceTrack);
+
+      const failed = validated.filter((c) => c.itunesValidation === 'not_found');
+
+      if (sessionId && failed.length > 0) {
         logEventSafe(
           sessionId,
           'itunes_validation_failed',
           {
-            failed_tracks: dropped.map((r) => ({ track: r.track, artist: r.artist })),
-            failed_count: dropped.length,
-            total_recs: recs.length,
+            failed_tracks: failed.map((r) => ({ track: r.track, artist: r.artist })),
+            failed_count: failed.length,
+            total_candidates: validated.length,
           },
           isTester
         );
       }
 
-      if (kept.length === 0 && dropped.length > 0) {
-        for (const rec of dropped) {
-          res.write(JSON.stringify({ type: 'rec_ready', rec }) + '\n');
-        }
-        enrichedRecs = dropped;
-      } else {
-        enrichedRecs = kept;
+      for (const rec of surfaced) {
+        res.write(JSON.stringify({ type: 'rec_ready', rec }) + '\n');
       }
+
+      // Rank alongside what was shown is the whole point of logging this: it is
+      // what makes the "does rank-1 beat rank-3" test possible in September.
+      if (sessionId) {
+        for (const rec of surfaced) {
+          logEventSafe(
+            sessionId,
+            'rec_shown',
+            {
+              track: rec.track,
+              artist: rec.artist,
+              connection_type: rec.connectionType,
+              tier: rec.tier,
+              distant: !!rec.distant,
+              rank: rec._rank,
+            },
+            isTester
+          );
+        }
+        if (skipped.length > 0) {
+          logEventSafe(sessionId, 'rec_candidates_skipped', { skipped }, isTester);
+        }
+      }
+
+      enrichedRecs = surfaced;
+
+      console.log(
+        `[recs] generated=${candidates.length} validated_ok=${
+          validated.length - failed.length
+        } surfaced=${surfaced.length} ranks=[${surfaced
+          .map((r) => r._rank)
+          .join(',')}] types=[${surfaced.map((r) => r.connectionType).join(',')}]`
+      );
     }
 
     // --- progress logging -------------------------------------------------

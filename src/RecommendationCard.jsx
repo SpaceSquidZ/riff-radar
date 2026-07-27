@@ -43,6 +43,36 @@ function PlayIcon({ playing }) {
   );
 }
 
+// D-022: five named connection types replace the old three fixed axes.
+//
+// The old structure (Structural twin / Adjacent genre / Surprise pick) rested
+// on structural matching D-009 established we cannot perform. "Structural twin"
+// was an unbackable claim, "adjacent genre" was too vague for a user to
+// evaluate, and "surprise" invited randomness.
+//
+// Every type below is something the model genuinely knows and a user can
+// verify or dispute. The label becomes the arguable part, which is the
+// positioning made literal.
+//
+// Stored snake_case so the model produces a constrained token rather than a
+// display string it might punctuate differently every time.
+const CONNECTION_LABELS = {
+  same_hand: 'Same hand',
+  lineage: 'Lineage',
+  same_move: 'Same move',
+  same_scene: 'Same scene',
+  same_mechanism: 'Same mechanism',
+  // "Second listen" is the sixth type, deferred to November (D-024): it needs
+  // rapport, which needs memory, which needs accounts.
+  second_listen: 'Second listen',
+};
+
+function connectionLabel(type) {
+  if (!type) return null;
+  const key = String(type).toLowerCase().replace(/[\s-]+/g, '_');
+  return CONNECTION_LABELS[key] || null;
+}
+
 function spotifySearchUrl(track, artist) {
   const q = encodeURIComponent(`${track} ${artist}`);
   return `https://open.spotify.com/search/${q}`;
@@ -63,6 +93,10 @@ export default function RecommendationCard({ rec, isPlaying, onTogglePlay, onOut
   const hasPreview = !!rec.previewUrl;
   const hasArtwork = !!rec.artworkUrl;
   const hasAppleMusicLink = !!rec.trackViewUrl;
+
+  // connectionType is the v2b field. matchAxis is the v2a shape, tolerated so a
+  // conversation open across the deploy does not render blank pills.
+  const label = connectionLabel(rec.connectionType) || rec.matchAxis || null;
 
   useEffect(() => {
     if (explanationRef.current) {
@@ -90,7 +124,10 @@ export default function RecommendationCard({ rec, isPlaying, onTogglePlay, onOut
 
       <div className="rec-row-body">
         <div className="rec-row-header">
-          {rec.matchAxis && <span className="rec-pill">{rec.matchAxis}</span>}
+          {label && <span className="rec-pill">{label}</span>}
+          {/* DISTANT is a tag, never a type: far in language, geography, or era,
+              but still carrying a real connection underneath. */}
+          {rec.distant && <span className="rec-pill rec-pill-distant">Distant</span>}
           {metaLine && <span className="rec-row-meta">{metaLine}</span>}
         </div>
 
