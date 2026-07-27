@@ -63,9 +63,23 @@ function extractStructuredData(replyText) {
     cleanedReply: replyText,
   };
 
-  const match =
-    replyText.match(/<!--RIFF_RADAR_RECS:(\{.*?\})-->/s) ||
-    replyText.match(/<!--RIFF_RADAR_META:(\{.*?\})-->/s);
+  // BUG: the model occasionally self-corrects mid-generation ("wait, let me
+  // fix that, I repeated an artist") and emits a SECOND metadata block after
+  // the first. A regex without the global flag returns the first match, which
+  // is the abandoned draft, and everything after it (including the correction
+  // text and the real block) streams through as visible text.
+  //
+  // Matching greedily to the LAST occurrence picks whichever block he actually
+  // meant to stand by. This is a safety net, not a fix for the root cause: the
+  // real fix is the instruction below telling him not to self-correct in the
+  // open at all.
+  const recsMatches = [...replyText.matchAll(/<!--RIFF_RADAR_RECS:(\{.*?\})-->/gs)];
+  const metaMatches = [...replyText.matchAll(/<!--RIFF_RADAR_META:(\{.*?\})-->/gs)];
+  const match = recsMatches.length
+    ? recsMatches[recsMatches.length - 1]
+    : metaMatches.length
+    ? metaMatches[metaMatches.length - 1]
+    : null;
 
   if (!match) return empty;
 
@@ -77,6 +91,17 @@ function extractStructuredData(replyText) {
     return { ...empty, cleanedReply: replyText.replace(match[0], '').trimEnd() };
   }
 
+  // Strip EVERYTHING from the start of the first metadata marker onward, not
+  // just the winning block's own text. If he self-corrected, the visible reply
+  // otherwise still contains "Wait, let me fix that, I repeated an artist by
+  // mistake" followed by a dangling JSON blob, which is exactly what leaked to
+  // the user.
+  const firstMarkerIdx = replyText.search(/<!--RIFF_RADAR_(RECS|META):/);
+  const cleaned =
+    firstMarkerIdx === -1
+      ? replyText.trimEnd()
+      : replyText.slice(0, firstMarkerIdx).trimEnd();
+
   return {
     recs: Array.isArray(parsed.recs) ? parsed.recs : [],
     followUpQuestion:
@@ -84,7 +109,7 @@ function extractStructuredData(replyText) {
     arcBeatDelivered: parsed.arcBeatDelivered === true,
     askOffered: parsed.askOffered === true,
     askAnswered: parsed.askAnswered === true,
-    cleanedReply: replyText.replace(match[0], '').trimEnd(),
+    cleanedReply: cleaned,
   };
 }
 
