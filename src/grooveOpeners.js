@@ -76,75 +76,75 @@ Take one if something catches. Or tell me what's actually in your ears right now
 export const RETURN_GREETINGS = [
   {
     id: 'r01',
-    text: `You came back. I didn't want to assume, so I'd left it alone.
+    text: `You came back. I wasn't going to assume you would.
 
-How have you been? Not asking for form's sake, I have genuinely no idea what a week is like where you are.`,
-    records: `I've been going through the shelves since we spoke. Pulled these two out and haven't put them back yet.
+How have you been? I'm asking because I actually don't know what a week is like where you are.`,
+    records: `I've been digging through the shelves since we talked. These two came out and never went back.
 
-Have a listen if you want. Or ignore them entirely and tell me what you've actually been playing, I'd take that over my own picks most nights.`,
+See if either one does anything for you. Or tell me what you've been playing instead, I'd honestly rather hear that.`,
   },
   {
     id: 'r02',
-    text: `Oh good. I'd started wondering whether the channel only worked the once.
+    text: `Oh good. I'd started wondering if the channel only worked the one time.
 
-Everything alright over there?`,
-    records: `I kept digging while you were gone. These two came out of it and I've been going back and forth on the second one all evening.
+Everything okay over there?`,
+    records: `I kept looking while you were gone. Found these two, and I've been going back and forth on the second one all night.
 
-See what you think. Or bring me something instead, I don't need to be the one choosing.`,
+Tell me what you think. Or bring me something of yours, I don't need to be the one picking.`,
   },
   {
     id: 'r03',
-    text: `There you are. I've been keeping better notes since you turned up, which is either good practice or just something to do with the time.
+    text: `There you are. I've been keeping better notes since you showed up, which is either good practice or just something to do with the time.
 
 How's it been?`,
-    records: `Found these two somewhere in the middle of that. One of them I'm fairly sure about, the other I keep changing my mind on.
+    records: `These two came out of that. One I'm sure about. The other I keep changing my mind on.
 
-Tell me if either lands. And if you've got something of your own going, I'd rather hear about that first.`,
+Tell me if either lands. And if you've had something running on your end, start there instead.`,
   },
   {
     id: 'r04',
     text: `Back again. Good.
 
-I won't ask what took you, time doesn't mean the same thing on my end anyway.`,
-    records: `I've had these two on more than anything else since we last spoke. Not for any occasion, they just kept coming back around.
+I won't ask what took you. Time doesn't mean the same thing on my end anyway.`,
+    records: `These two have been on more than anything else since we talked. No particular reason, they just kept coming back around.
 
-What do you make of them? Or skip that and tell me what you've been listening to, which is the more interesting question.`,
+What do you make of them? Or skip that and tell me what you've been listening to, which is the better question anyway.`,
   },
   {
     id: 'r05',
     text: `I was hoping that was you and not the receiver doing something clever.
 
-How are you? I've had a quiet stretch, which is normal, but it's better with someone on the other end of it.`,
-    records: `Went looking for something specific this week and found these two instead, which is usually how it goes.
+How are you? It's been quiet, which is normal, but it's better with someone on the other end of it.`,
+    records: `Went looking for one specific thing this week and found these two instead. That's usually how it goes.
 
-Take a listen. Or hand me something of yours, I'm not precious about whose turn it is.`,
+Have them. Or hand me something of yours, I'm not precious about whose turn it is.`,
   },
   {
     id: 'r06',
     text: `Evening. Or whatever it is where you are, I've never been able to work that part out.
 
 Everything holding together?`,
-    records: `I pulled these while you were away. They don't obviously belong together and that's most of why I kept them side by side.
+    records: `Pulled these two while you were gone. They don't obviously belong together, and that's most of why I kept them side by side.
 
-Curious what you hear in them. And tell me what's been on for you, I'd like to know.`,
+Curious what you hear in them. And tell me what's been on for you, I want to know.`,
   },
   {
     id: 'r07',
     text: `You're becoming a habit. I mean that as the good version of that sentence.
 
-How's things?`,
-    records: `Been sitting with these two most of the week. One of them I'd have skipped past a year ago, which I find interesting about myself.
+How's things been?`,
+    records: `I've been sitting with these two most of the week. One of them I'd have skipped past a year ago, which I find interesting about myself.
 
-See if either does anything for you. Or start somewhere else entirely, I don't mind.`,
+See if either does anything. Or start somewhere else entirely, I don't mind.`,
   },
   {
     id: 'r08',
-    text: `Good, you're here. I'd put something aside and had nowhere to put it.
+    text: `Good, you're here. I found something and had nobody to play it for.
 
-Hope it's been alright on your end.`,
-    records: `These two. I found them a few days apart and only realised afterwards why I'd kept them both.
+Hope things have been okay on your end.`,
+    records: `These two. I found them a few days apart and only worked out afterward why I'd kept them both.
 
-Have a listen and tell me if that reads to you at all. Or bring me yours and I'll leave mine for another night.`,
+Have a listen and tell me if that reads to you at all. Or bring me yours and I'll save mine for another night.`,
   },
 ];
 
@@ -153,21 +153,21 @@ Have a listen and tell me if that reads to you at all. Or bring me yours and I'l
 export const LONG_GAP_GREETINGS = [
   {
     id: 'g01',
-    text: `You came back. Most signals do not.
+    text: `You came back. Most signals don't.
 
-I'm not going to ask where you were. Just glad the line still holds.`,
-    records: `I kept the shelf going in the meantime. These two are where it got to.
+I'm not going to ask where you were. I'm just glad the line still holds.`,
+    records: `I kept the shelf going while you were gone. These two are where it got to.
 
-Have a listen. And if you've found things while you were gone, I'd much rather hear those.`,
+Have them. And if you found things out there, I'd much rather hear those.`,
   },
   {
     id: 'g02',
     text: `It's been a while. I wasn't counting, but I noticed.
 
-How have you been? Genuinely asking.`,
+How have you been? I'm actually asking.`,
     records: `A lot came through in that stretch. These two are the ones that stayed.
 
-See what you think. Or catch me up on yours first, that's the more interesting half of this.`,
+Tell me what you think. Or catch me up on yours first, that's the more interesting half of this.`,
   },
 ];
 
