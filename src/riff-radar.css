@@ -1033,3 +1033,141 @@ body {
 .rec-followup {
   max-width: 100%;
 }
+
+/* ===========================================================================
+   OPENER RECORDS: same material as recommendation cards
+   ===========================================================================
+
+   These were deliberately darker and quieter, on the reasoning that "two
+   records I have on" and "three records I found for you" should not look
+   identical (D-025).
+
+   That reasoning had a hole in it: the copy already does that work. Groove says
+   "These are just what I had on. I wasn't expecting anyone, so it isn't curated
+   for you." The visual difference was redundant, and it made the opener look
+   like a lesser version of the real thing rather than the same kind of object.
+
+   What genuinely stays different: no axis pill and no explanation line, because
+   he is not claiming a connection between these and anything. Same material,
+   fewer elements.
+   =========================================================================== */
+
+.opener-record {
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(0, 0, 0, 0.014) 0px,
+      rgba(0, 0, 0, 0.014) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(0, 0, 0, 0.01) 0px,
+      rgba(0, 0, 0, 0.01) 1px,
+      transparent 1px,
+      transparent 4px
+    ),
+    linear-gradient(168deg, #e8e4d9 0%, #ddd8cb 100%);
+  border: 1px solid #c4bfb0;
+  border-radius: 4px;
+  color: #24231f;
+  padding: 11px 13px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.35) inset,
+              0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.opener-record::before {
+  background: #8d7f66;
+}
+
+.opener-record-art {
+  border-radius: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.opener-record-art-empty {
+  background: #cdc7b7;
+}
+
+.opener-record-title {
+  color: #1c1b18;
+  font-size: 14.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.opener-record-artist {
+  color: #514c42;
+  font-size: 13px;
+}
+
+.opener-record-meta {
+  color: #6f6a5c;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.opener-record-play,
+.opener-record-link {
+  background: #24231f;
+  border: 1px solid #14130f;
+  color: #ece8dd;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.opener-record-play:hover,
+.opener-record-link:hover {
+  background: #34322b;
+}
+
+/* ===========================================================================
+   PREVIEW DURATION AFFORDANCE
+   ===========================================================================
+
+   The play button looks like it plays the song. It plays a 30-second clip, and
+   the cutoff is abrupt enough to read as a bug rather than a boundary.
+
+   Labelling the button states the limit BEFORE the click rather than after,
+   which is the difference between a constraint and a surprise. A tooltip would
+   not survive touch, and a note under the cards is easy to miss.
+
+   Pure CSS so RecommendationCard.jsx stays untouched.
+   =========================================================================== */
+
+.rec-row-actions,
+.opener-record-actions {
+  position: relative;
+}
+
+.rec-row-play,
+.opener-record-play {
+  position: relative;
+}
+
+/* Small badge riding the play button. Reads as a spec stamped on hardware. */
+.rec-row-play::after,
+.opener-record-play::after {
+  content: '30s';
+  position: absolute;
+  bottom: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 2px;
+  background: #24231f;
+  color: #cfc9ba;
+  border: 1px solid #14130f;
+  pointer-events: none;
+}
+
+/* Give the row room so the badge does not collide with the card edge. */
+.rec-row,
+.opener-record {
+  padding-bottom: 15px;
+}
