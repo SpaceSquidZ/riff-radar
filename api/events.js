@@ -1,201 +1,111 @@
-import { useEffect, useRef, useState } from 'react';
-
-// Inline SVG so there's no icon library dependency and no extra network
-// request. Simple glyph marks used to label the outbound link to each service.
-
-function SpotifyIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
-      <circle cx="12" cy="12" r="11" fill="#1DB954" />
-      <path
-        d="M6.5 9.2c3.6-1 7.6-.7 10.6 1.1M7.2 12.2c3-.8 6.3-.5 8.8 1M7.9 15.1c2.4-.6 5-.4 7 .8"
-        stroke="#fff"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        fill="none"
-      />
-    </svg>
-  );
-}
-
-function AppleMusicIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
-      <rect x="1" y="1" width="22" height="22" rx="5" fill="#FA243C" />
-      <path
-        d="M15.5 6.4l-6 1.3v6.9a1.9 1.9 0 1 0 1.2 1.8V9.9l4.8-1v4.3a1.9 1.9 0 1 0 1.2 1.8V6.4z"
-        fill="#fff"
-      />
-    </svg>
-  );
-}
-
-function PlayIcon({ playing }) {
-  return playing ? (
-    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
-      <rect x="7" y="6" width="3.5" height="12" rx="1" fill="currentColor" />
-      <rect x="13.5" y="6" width="3.5" height="12" rx="1" fill="currentColor" />
-    </svg>
-  ) : (
-    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
-      <path d="M8 5.5v13l10-6.5-10-6.5z" fill="currentColor" />
-    </svg>
-  );
-}
-
-// D-022: five named connection types replace the old three fixed axes.
+// api/events.js
 //
-// The old structure (Structural twin / Adjacent genre / Surprise pick) rested
-// on structural matching D-009 established we cannot perform. "Structural twin"
-// was an unbackable claim, "adjacent genre" was too vague for a user to
-// evaluate, and "surprise" invited randomness.
+// Server-side event ingestion. The only path by which browser events reach Supabase.
 //
-// Every type below is something the model genuinely knows and a user can
-// verify or dispute. The label becomes the arguable part, which is the
-// positioning made literal.
+// Why this exists (D-008): events were being written from the browser using the
+// Supabase anon key, which ships to every visitor. Anyone could POST arbitrary
+// rows into the table the entire portfolio funnel depends on.
 //
-// Stored snake_case so the model produces a constrained token rather than a
-// display string it might punctuate differently every time.
-const CONNECTION_LABELS = {
-  same_hand: 'Same hand',
-  lineage: 'Lineage',
-  same_move: 'Same move',
-  same_scene: 'Same scene',
-  same_mechanism: 'Same mechanism',
-  // "Second listen" is the sixth type, deferred to November (D-024): it needs
-  // rapport, which needs memory, which needs accounts.
-  second_listen: 'Second listen',
-};
+// Note: api/chat.js already writes server-side via logEvent(..., useAdmin=true)
+// and is unaffected by this. This endpoint exists for the BROWSER's events.
 
-function connectionLabel(type) {
-  if (!type) return null;
-  const key = String(type).toLowerCase().replace(/[\s-]+/g, '_');
-  return CONNECTION_LABELS[key] || null;
-}
+import { supabaseAdmin } from '../src/supabaseClient.js';
 
-function spotifySearchUrl(track, artist) {
-  const q = encodeURIComponent(`${track} ${artist}`);
-  return `https://open.spotify.com/search/${q}`;
-}
+// Every event type the app is allowed to write.
+// Unknown types are rejected rather than stored, so typos surface in dev
+// instead of six weeks later in a broken funnel query.
+const ALLOWED_EVENTS = new Set([
+  // --- currently in use ---
+  'session_start',
+  'form_field_completed',
+  'moment_submitted',
+  'message_sent',
+  'preview_played',
+  'outbound_click',
+  'rec_generated',
+  'itunes_validation_failed',
 
-// Horizontal ROW layout, replacing the old 3-column grid of tall cards.
-//
-// The 3-column grid squeezed every card into a narrow vertical strip: the
-// explanation clamped after ~4 lines, long titles truncated with an ellipsis,
-// and the two service links stacked and wrapped ("Apple / Music" across two
-// lines). A row gives text its natural horizontal space, so more information
-// fits in less vertical distance, and it collapses cleanly on mobile.
-export default function RecommendationCard({ rec, isPlaying, onTogglePlay, onOutboundClick }) {
-  const [expanded, setExpanded] = useState(false);
-  const [isOverflowing, setIsOverflowing] = useState(false);
-  const explanationRef = useRef(null);
+  // --- v2a character system (July 2026) ---
+  'lore_stage_available',
+  'arc_beat_delivered',
+  'daily_ask_offered',
+  'daily_ask_answered',
 
-  const hasPreview = !!rec.previewUrl;
-  const hasArtwork = !!rec.artworkUrl;
-  const hasAppleMusicLink = !!rec.trackViewUrl;
+  // --- arriving with the v4 rebuild (PRD v4.0 §8) ---
+  'opener_pair_shown',
+  'opener_track_engaged',
+  'first_message_sent',
+  'input_track_identified',
+  'input_track_corrected',
+  'groove_question_asked',
+  'groove_question_answered',
+  'rec_candidates_generated',
+  'rec_candidates_skipped',
+  'rec_validated',
+  'rec_shown',
+  'rec_novelty_reported',
+  'rec_marked',
+  'refinement_chip_clicked',
+  'crate_viewed',
+  'crate_link_clicked',
+  'lore_beat_delivered',
+  'log_viewed',
+  'return_visit',
+]);
 
-  // connectionType is the v2b field. matchAxis is the v2a shape, tolerated so a
-  // conversation open across the deploy does not render blank pills.
-  const label = connectionLabel(rec.connectionType) || rec.matchAxis || null;
+const MAX_PAYLOAD_BYTES = 8000;
 
-  useEffect(() => {
-    if (explanationRef.current) {
-      const el = explanationRef.current;
-      setIsOverflowing(el.scrollHeight > el.clientHeight + 1);
-    }
-  }, [rec.explanation]);
-
-  function logOutbound(service, url) {
-    onOutboundClick?.({ track: rec.track, artist: rec.artist, service, url });
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'method not allowed' });
   }
 
-  const metaLine = [rec.releaseYear, rec.genre].filter(Boolean).join(' \u00b7 ');
-  const spotifyUrl = spotifySearchUrl(rec.track, rec.artist);
+  let body = req.body;
+  // sendBeacon sends a Blob; Vercel may hand it over unparsed.
+  if (typeof body === 'string') {
+    try {
+      body = JSON.parse(body);
+    } catch {
+      return res.status(400).json({ error: 'malformed json' });
+    }
+  }
 
-  return (
-    <div className="rec-row">
-      <div className="rec-row-art">
-        {hasArtwork ? (
-          <img src={rec.artworkUrl} alt="" className="rec-row-artwork" />
-        ) : (
-          <div className="rec-row-artwork rec-row-artwork-empty" aria-hidden="true" />
-        )}
-      </div>
+  const { session_id, event_type, payload = {} } = body || {};
 
-      <div className="rec-row-body">
-        <div className="rec-row-header">
-          {label && <span className="rec-pill">{label}</span>}
-          {/* DISTANT is a tag, never a type: far in language, geography, or era,
-              but still carrying a real connection underneath. */}
-          {rec.distant && <span className="rec-pill rec-pill-distant">Distant</span>}
-          {metaLine && <span className="rec-row-meta">{metaLine}</span>}
-        </div>
+  if (typeof event_type !== 'string' || !ALLOWED_EVENTS.has(event_type)) {
+    console.warn('[events] rejected unknown event_type:', event_type);
+    return res.status(400).json({ error: 'invalid event_type' });
+  }
+  if (typeof session_id !== 'string' || session_id.length < 4) {
+    return res.status(400).json({ error: 'invalid session_id' });
+  }
+  if (typeof payload !== 'object' || payload === null) {
+    return res.status(400).json({ error: 'payload must be an object' });
+  }
+  if (JSON.stringify(payload).length > MAX_PAYLOAD_BYTES) {
+    return res.status(400).json({ error: 'payload too large' });
+  }
 
-        <p className="rec-row-title">{rec.track}</p>
-        <p className="rec-row-artist">{rec.artist}</p>
+  if (!supabaseAdmin) {
+    console.error('[events] supabaseAdmin is null — SUPABASE_SERVICE_ROLE_KEY missing');
+    return res.status(202).json({ ok: false });
+  }
 
-        {rec.explanation && (
-          <>
-            <p
-              ref={explanationRef}
-              className={`rec-row-explanation${expanded ? ' expanded' : ''}`}
-            >
-              {rec.explanation}
-            </p>
-            {isOverflowing && (
-              <button
-                type="button"
-                className="rec-read-more"
-                onClick={() => setExpanded((e) => !e)}
-              >
-                {expanded ? 'Show less' : 'Read more'}
-              </button>
-            )}
-          </>
-        )}
-      </div>
+  try {
+    const { error } = await supabaseAdmin
+      .from('events')
+      .insert({ session_id, event_type, payload });
 
-      <div className="rec-row-actions">
-        {hasPreview && (
-          <button
-            type="button"
-            onClick={onTogglePlay}
-            className="rec-row-play"
-            aria-label={isPlaying ? 'Pause preview' : 'Play 30 second preview'}
-            title={isPlaying ? 'Pause preview' : 'Play 30s preview'}
-          >
-            <PlayIcon playing={isPlaying} />
-          </button>
-        )}
-
-        <div className="rec-row-links">
-          {hasAppleMusicLink && (
-            <a
-              href={rec.trackViewUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rec-icon-link"
-              aria-label="Open in Apple Music"
-              title="Apple Music"
-              onClick={() => logOutbound('apple_music', rec.trackViewUrl)}
-            >
-              <AppleMusicIcon />
-            </a>
-          )}
-
-          <a
-            href={spotifyUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="rec-icon-link"
-            aria-label="Search on Spotify"
-            title="Spotify"
-            onClick={() => logOutbound('spotify', spotifyUrl)}
-          >
-            <SpotifyIcon />
-          </a>
-        </div>
-      </div>
-    </div>
-  );
+    if (error) {
+      console.error('[events] insert failed:', event_type, error.message);
+      // Still 202. Analytics failure is not the user's problem, and the client
+      // should not retry into a loop against a broken table.
+      return res.status(202).json({ ok: false });
+    }
+    return res.status(202).json({ ok: true });
+  } catch (err) {
+    console.error('[events] unexpected:', err?.message || err);
+    return res.status(202).json({ ok: false });
+  }
 }
