@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import ConsentBanner, { hasSeenConsent } from './ConsentBanner';
-import MomentForm from './MomentForm';
 import MessageContent from './MessageContent';
-import YouTubeMomentPicker from './YouTubeMomentPicker';
 import RecommendationCard from './RecommendationCard';
 import OpenerRecord from './OpenerRecord';
+import InputTrackCard from './InputTrackCard';
 import { getSessionId } from './sessionId';
 import {
   initSession,
@@ -47,9 +46,6 @@ export default function App() {
   const [phase, setPhase] = useState('chat');
   const [showConsent, setShowConsent] = useState(!hasSeenConsent());
 
-  const [videoLoaded, setVideoLoaded] = useState(false);
-  const [youtubeTimestamp, setYoutubeTimestamp] = useState('');
-  const [titleGuess, setTitleGuess] = useState(null);
   const [sourceTrack, setSourceTrack] = useState(null);
 
   const [messages, setMessages] = useState([]);
@@ -358,6 +354,25 @@ export default function App() {
             // so it only happens when Groove confirms the beat is present in
             // his visible reply. A false positive burns that beat forever.
 
+            // Groove read a track out of what they typed and the server
+            // verified it. Attaching it to the USER's message rather than his
+            // reply puts the label next to the thing it describes.
+            if (event.inputTrack) {
+              setSourceTrack({
+                track: event.inputTrack.track,
+                artist: event.inputTrack.artist,
+              });
+              const lastUserId = [...newMessages]
+                .reverse()
+                .find((m) => m.role === 'user')?.id;
+              if (lastUserId) {
+                updateMessageById(lastUserId, (msg) => ({
+                  ...msg,
+                  inputTrack: event.inputTrack,
+                }));
+              }
+            }
+
             if (event.arcBeatId) {
               markArcBeatDelivered(event.arcBeatId);
               emit('arc_beat_delivered', { beat_id: event.arcBeatId });
@@ -401,24 +416,6 @@ export default function App() {
     }
   }
 
-  function handleMomentSubmit(moment) {
-    const newMessages = [
-      { id: `u-${Date.now()}`, role: 'user', content: moment.formattedMessage },
-    ];
-    const track = { track: moment.song, artist: moment.artist };
-    setSourceTrack(track);
-
-    emit('moment_submitted', {
-      has_timestamp: !!moment.timestamp,
-      what_caught_you_length: moment.whatCaughtYou?.length ?? 0,
-      used_youtube: !!videoLoaded,
-    });
-
-    setMessages(newMessages);
-    setPhase('chat');
-    sendMessage(newMessages, track);
-  }
-
   function handleSend() {
     if (!input.trim()) return;
     if (isStreaming) return;
@@ -444,6 +441,20 @@ export default function App() {
     sendMessage(newMessages);
   }
 
+  // Tapping the label and fixing it is the whole reason the card is visible.
+  // A guess the user cannot see is a guess they cannot correct.
+  function handleInputTrackCorrect(messageId, corrected) {
+    setSourceTrack(corrected);
+    updateMessageById(messageId, (msg) => ({
+      ...msg,
+      inputTrack: { ...corrected, confidence: 'user_corrected' },
+    }));
+    emit('input_track_corrected', {
+      track: corrected.track,
+      artist: corrected.artist,
+    });
+  }
+
   function handleOutboundClick({ track, artist, service, url, source }) {
     emit('outbound_click', {
       track,
@@ -461,38 +472,13 @@ export default function App() {
     }
   }
 
-  const videoColStyle = phase === 'chat' && !videoLoaded ? { display: 'none' } : undefined;
-
   return (
     <>
       <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '1.5rem' }}>
         <h1 className="app-logo">Riff Radar</h1>
 
         <div className="app-layout">
-          <div className="app-layout-video-col" style={videoColStyle}>
-            <YouTubeMomentPicker
-              onTimestampCaptured={setYoutubeTimestamp}
-              onTitleGuessed={setTitleGuess}
-              onVideoLoadedChange={setVideoLoaded}
-            />
-            {phase === 'chat' && videoLoaded && (
-              <p style={{ fontSize: '0.8em', opacity: 0.6, marginTop: '8px' }}>
-                Want to describe another moment from this video? Type it in the message box.
-              </p>
-            )}
-          </div>
-
           <div className="app-layout-content-col">
-            {phase === 'form' && (
-              <MomentForm
-                onSubmit={handleMomentSubmit}
-                youtubeTimestamp={youtubeTimestamp}
-                videoLoaded={videoLoaded}
-                titleGuess={titleGuess}
-                onEvent={emit}
-              />
-            )}
-
             {phase === 'chat' && (
               <div>
                 {messages.map((msg, i) => {
@@ -548,6 +534,15 @@ export default function App() {
                           <div className="chat-bubble">
                             <MessageContent content={msg.content} />
                           </div>
+                        )}
+
+                        {msg.role === 'user' && msg.inputTrack && (
+                          <InputTrackCard
+                            inputTrack={msg.inputTrack}
+                            onCorrect={(corrected) =>
+                              handleInputTrackCorrect(msg.id, corrected)
+                            }
+                          />
                         )}
 
                         {showPreparing && (
