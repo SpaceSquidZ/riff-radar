@@ -1181,3 +1181,440 @@ body {
   color: #4a453b;
   border: 1px solid #a9a294;
 }
+
+/* ===========================================================================
+   INPUT TRACK CARD
+   ===========================================================================
+   The song Groove thinks the user brought him. A small hand-written label, not
+   a form field: an object passed across rather than a confirmation dialog.
+
+   Deliberately smaller and paler than a recommendation card. This is the user's
+   own track echoed back, not something being offered to them, and it should
+   read as a note in the margin rather than a result.
+   =========================================================================== */
+
+.input-track-card {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  margin: 4px 0 10px 0;
+  padding: 7px 12px 8px 12px;
+  background: linear-gradient(168deg, #ded9cc 0%, #d3cdbe 100%);
+  border: 1px solid #b8b2a2;
+  /* Two square corners and two soft ones: a torn label, not a chip. */
+  border-radius: 3px 3px 3px 10px;
+  color: #24231f;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.input-track-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.38);
+}
+
+/* Unverified means the catalog did not confirm both title and artist, so this
+   is Groove's reading and the user is the only one who can settle it. Dashed
+   edge signals "provisional" without shouting error. */
+.input-track-card-unverified {
+  border-style: dashed;
+  border-color: #9d9788;
+}
+
+.input-track-caption {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #7d7767;
+  margin-bottom: 2px;
+}
+
+.input-track-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.input-track-artist {
+  font-size: 12px;
+  color: #55504a;
+}
+
+.input-track-meta {
+  font-size: 10.5px;
+  color: #7d7767;
+  margin-top: 2px;
+}
+
+/* --- editing --- */
+
+.input-track-card-editing {
+  cursor: default;
+  gap: 6px;
+  padding: 10px 12px 11px 12px;
+  min-width: 240px;
+}
+
+.input-track-field {
+  width: 100%;
+  font-size: 13px;
+  font-family: inherit;
+  padding: 5px 7px;
+  border: 1px solid #a9a294;
+  border-radius: 3px;
+  background: #f2efe6;
+  color: #24231f;
+  box-sizing: border-box;
+}
+
+.input-track-field:focus {
+  outline: none;
+  border-color: #6b6250;
+}
+
+.input-track-edit-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.input-track-save,
+.input-track-cancel {
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 4px 9px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.input-track-save {
+  background: #24231f;
+  color: #ece8dd;
+  border: 1px solid #14130f;
+  font-weight: 600;
+}
+
+.input-track-cancel {
+  background: transparent;
+  color: #6b6558;
+  border: 1px solid #b0a996;
+}
+
+/* ===========================================================================
+   THE CRATE
+   ===========================================================================
+   Tracks the user chose to keep, and the single place they leave from.
+
+   A DRAWER, NOT A COLUMN. The conversation is centred with a fixed max width,
+   so a static side column would push it off-centre, which is the exact thing
+   that looked wrong earlier. This opens over the conversation instead. Same
+   drawer will house the Transmission Log in November.
+   =========================================================================== */
+
+/* The tab is always visible, even at zero. It is the only hint that saving is
+   possible, and a control that materialises the first time you use it is one
+   you had no reason to try. */
+.crate-tab {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 12px 7px 13px 6px;
+  background: #22242d;
+  border: 1px solid #34363f;
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  color: #b9bcc7;
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.crate-tab:hover {
+  background: #2b2e38;
+  color: #e8e8ea;
+}
+
+.crate-tab-open {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.crate-tab-label {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+  font-weight: 600;
+}
+
+.crate-tab-count {
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  border-radius: 8px;
+  background: #d8d3c6;
+  color: #1c1b18;
+  text-align: center;
+}
+
+.crate-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.crate-drawer {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: min(340px, 88vw);
+  z-index: 50;
+  background: #1a1c23;
+  border-right: 1px solid #34363f;
+  transform: translateX(-100%);
+  transition: transform 0.22s ease;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+}
+
+.crate-drawer-open {
+  transform: translateX(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crate-drawer {
+    transition: none;
+  }
+}
+
+.crate-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 12px 16px;
+  border-bottom: 1px solid #2b2e38;
+}
+
+.crate-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #d8d3c6;
+}
+
+.crate-close {
+  background: transparent;
+  border: none;
+  color: #8a8d99;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.crate-close:hover {
+  color: #e8e8ea;
+}
+
+.crate-empty {
+  padding: 22px 18px;
+  color: #9a9daa;
+  font-size: 13px;
+}
+
+.crate-empty p {
+  margin: 0 0 8px 0;
+}
+
+.crate-empty-hint {
+  font-size: 12px;
+  color: #71747f;
+  line-height: 1.5;
+}
+
+.crate-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.crate-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 14px;
+}
+
+.crate-item:hover {
+  background: #20222a;
+}
+
+.crate-item-art {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 3px;
+  object-fit: cover;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+
+.crate-item-art-empty {
+  background: #2b2e38;
+}
+
+/* min-width:0 is what lets long titles shrink inside the flex row instead of
+   forcing the drawer wider. */
+.crate-item-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.crate-item-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #e8e8ea;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.crate-item-artist {
+  margin: 1px 0 0 0;
+  font-size: 11.5px;
+  color: #8a8d99;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.crate-item-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.crate-item-play,
+.crate-item-link,
+.crate-item-remove {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid #34363f;
+  background: #24262e;
+  color: #c8cbd6;
+  cursor: pointer;
+  text-decoration: none;
+  padding: 0;
+}
+
+.crate-item-play:hover,
+.crate-item-link:hover,
+.crate-item-remove:hover {
+  background: #2f323b;
+  color: #f0f0f2;
+}
+
+.crate-item-remove {
+  font-size: 16px;
+  line-height: 1;
+  color: #7c7f8c;
+  border-color: transparent;
+  background: transparent;
+}
+
+.crate-note {
+  margin: 0;
+  padding: 11px 16px 14px 16px;
+  border-top: 1px solid #2b2e38;
+  font-size: 11.5px;
+  color: #71747f;
+  line-height: 1.5;
+}
+
+/* --- Save buttons on the cards --- */
+
+.rec-row-save {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid #b8b2a2;
+  background: transparent;
+  color: #6f6a5c;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.rec-row-save:hover {
+  color: #24231f;
+  border-color: #6f6a5c;
+}
+
+.rec-row-save-on {
+  color: #8d7f66;
+  border-color: #8d7f66;
+}
+
+.opener-record-save {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid #b8b2a2;
+  background: transparent;
+  color: #6f6a5c;
+  cursor: pointer;
+  padding: 0;
+}
+
+.opener-record-save:hover {
+  color: #24231f;
+  border-color: #6f6a5c;
+}
+
+.opener-record-save-on {
+  color: #8d7f66;
+  border-color: #8d7f66;
+}
+
+/* On a phone the tab must not sit over the conversation. Bottom-left corner
+   keeps it reachable by thumb and out of the reading column. */
+@media (max-width: 700px) {
+  .crate-tab {
+    top: auto;
+    bottom: 84px;
+    border-radius: 0 8px 8px 0;
+    padding: 10px 6px 11px 5px;
+  }
+}

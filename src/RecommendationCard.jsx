@@ -30,6 +30,23 @@ function AppleMusicIcon() {
   );
 }
 
+// The save affordance. A star, not a plus: "keep this" rather than "add to a
+// queue." Choosing is the entire emotional content of the crate, so the control
+// should read as judgment, not as filing.
+function StarIcon({ filled }) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+      <path
+        d="M12 3.6l2.5 5.4 5.9.7-4.4 4 1.2 5.8L12 16.6 6.8 19.5 8 13.7l-4.4-4 5.9-.7L12 3.6z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function PlayIcon({ playing }) {
   return playing ? (
     <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
@@ -85,7 +102,14 @@ function spotifySearchUrl(track, artist) {
 // and the two service links stacked and wrapped ("Apple / Music" across two
 // lines). A row gives text its natural horizontal space, so more information
 // fits in less vertical distance, and it collapses cleanly on mobile.
-export default function RecommendationCard({ rec, isPlaying, onTogglePlay, onOutboundClick }) {
+export default function RecommendationCard({
+  rec,
+  isPlaying,
+  onTogglePlay,
+  onOutboundClick,
+  isSaved,
+  onToggleSave,
+}) {
   const [expanded, setExpanded] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const explanationRef = useRef(null);
@@ -156,6 +180,19 @@ export default function RecommendationCard({ rec, isPlaying, onTogglePlay, onOut
       </div>
 
       <div className="rec-row-actions">
+        {onToggleSave && (
+          <button
+            type="button"
+            onClick={() => onToggleSave(rec)}
+            className={`rec-row-save${isSaved ? ' rec-row-save-on' : ''}`}
+            aria-label={isSaved ? `Remove ${rec.track} from crate` : `Save ${rec.track} to crate`}
+            aria-pressed={!!isSaved}
+            title={isSaved ? 'In your crate' : 'Keep this'}
+          >
+            <StarIcon filled={!!isSaved} />
+          </button>
+        )}
+
         {hasPreview && (
           <button
             type="button"

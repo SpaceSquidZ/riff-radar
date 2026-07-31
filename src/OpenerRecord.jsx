@@ -39,6 +39,20 @@ function AppleMusicIcon() {
   );
 }
 
+function StarIcon({ filled }) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+      <path
+        d="M12 3.6l2.5 5.4 5.9.7-4.4 4 1.2 5.8L12 16.6 6.8 19.5 8 13.7l-4.4-4 5.9-.7L12 3.6z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function PlayIcon({ playing }) {
   return playing ? (
     <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
@@ -58,7 +72,14 @@ function spotifySearchUrl(track, artist) {
   return `https://open.spotify.com/search/${encodeURIComponent(`${track} ${artist}`)}`;
 }
 
-export default function OpenerRecord({ record, isPlaying, onTogglePlay, onOutboundClick }) {
+export default function OpenerRecord({
+  record,
+  isPlaying,
+  onTogglePlay,
+  onOutboundClick,
+  isSaved,
+  onToggleSave,
+}) {
   const { track, artist, year, genre, artworkUrl, trackViewUrl, previewUrl } = record;
   const spotifyUrl = spotifySearchUrl(track, artist);
   const metaLine = [year, genre].filter(Boolean).join(' \u00b7 ');
@@ -82,6 +103,19 @@ export default function OpenerRecord({ record, isPlaying, onTogglePlay, onOutbou
       </div>
 
       <div className="opener-record-actions">
+        {onToggleSave && (
+          <button
+            type="button"
+            onClick={() => onToggleSave(record)}
+            className={`opener-record-save${isSaved ? ' opener-record-save-on' : ''}`}
+            aria-label={isSaved ? `Remove ${track} from crate` : `Save ${track} to crate`}
+            aria-pressed={!!isSaved}
+            title={isSaved ? 'In your crate' : 'Keep this'}
+          >
+            <StarIcon filled={!!isSaved} />
+          </button>
+        )}
+
         {previewUrl && (
           <button
             className="opener-record-play"

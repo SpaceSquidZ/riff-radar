@@ -4,6 +4,7 @@ import MessageContent from './MessageContent';
 import RecommendationCard from './RecommendationCard';
 import OpenerRecord from './OpenerRecord';
 import InputTrackCard from './InputTrackCard';
+import CratePanel from './CratePanel';
 import { getSessionId } from './sessionId';
 import {
   initSession,
@@ -23,6 +24,7 @@ import {
 } from './loreProgress';
 import { FIRST_CONTACT, ACQUIRE_MS, pickReturnGreeting } from './grooveOpeners';
 import { pickOpenerPair } from './openerPairs';
+import { crateKey, readCrate, writeCrate, toCrateItem } from './crate';
 import { logEvent } from './supabaseClient';
 import { isTester } from './isTester';
 import './riff-radar.css';
@@ -69,6 +71,11 @@ export default function App() {
   // acquisition, not as a typing indicator: the design note is that a loading
   // state should be answerable to "what part of the apparatus is this."
   const [acquiring, setAcquiring] = useState(false);
+
+  // The crate. Session-scoped on purpose: it survives a refresh but not a new
+  // day, which is what it is. Cross-session persistence needs accounts.
+  const [crate, setCrate] = useState(() => readCrate());
+  const [crateOpen, setCrateOpen] = useState(false);
   // Counts only USER messages. Arc beats and pool asks are suppressed until
   // this reaches 2, so turn one is just the opener and one real exchange.
   const userTurnCountRef = useRef(0);
@@ -218,6 +225,35 @@ export default function App() {
       setAcquiring(false);
     };
   }, [showConsent]);
+
+  useEffect(() => {
+    writeCrate(crate);
+  }, [crate]);
+
+  const savedKeys = new Set(crate.map(crateKey));
+
+  function handleToggleSave(item, source = 'recommendation') {
+    const key = crateKey(item);
+    setCrate((prev) => {
+      if (prev.some((c) => crateKey(c) === key)) {
+        return prev.filter((c) => crateKey(c) !== key);
+      }
+      // Only saves are logged, not removes. A save is a signal about taste; a
+      // remove is usually a correction and would just add noise to the funnel.
+      emit('rec_marked', { track: item.track, artist: item.artist, source });
+      return [...prev, toCrateItem(item, source)];
+    });
+  }
+
+  function handleRemoveFromCrate(item) {
+    const key = crateKey(item);
+    setCrate((prev) => prev.filter((c) => crateKey(c) !== key));
+  }
+
+  function handleOpenCrate() {
+    setCrateOpen(true);
+    emit('crate_viewed', { track_count: crate.length });
+  }
 
   function updateMessageById(id, updater) {
     setMessages((prev) => prev.map((m) => (m.id === id ? updater(m) : m)));
@@ -463,6 +499,11 @@ export default function App() {
       url,
       source: source || 'recommendation',
     });
+    // Leaving FROM the crate is the batched exit the whole feature exists for,
+    // so it is worth being able to separate from an impulse click mid-chat.
+    if (source === 'crate') {
+      emit('crate_link_clicked', { track, artist, service });
+    }
     if (source === 'opener') {
       emit('opener_track_engaged', {
         pair_id: openerPairRef.current?.id || null,
@@ -558,6 +599,8 @@ export default function App() {
                                 isPlaying={activePreviewKey === previewKeyFor(t)}
                                 onTogglePlay={() => handleTogglePlay(t, 'opener')}
                                 onOutboundClick={handleOutboundClick}
+                                isSaved={savedKeys.has(crateKey(t))}
+                                onToggleSave={(rec) => handleToggleSave(rec, 'opener')}
                               />
                             ))}
                           </div>
@@ -573,6 +616,8 @@ export default function App() {
                                   isPlaying={activePreviewKey === previewKeyFor(rec)}
                                   onTogglePlay={() => handleTogglePlay(rec, 'recommendation')}
                                   onOutboundClick={handleOutboundClick}
+                                  isSaved={savedKeys.has(crateKey(rec))}
+                                  onToggleSave={(r) => handleToggleSave(r, 'recommendation')}
                                 />
                               ))}
                             </div>
@@ -656,6 +701,17 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      <CratePanel
+        open={crateOpen}
+        items={crate}
+        onOpen={handleOpenCrate}
+        onClose={() => setCrateOpen(false)}
+        onRemove={handleRemoveFromCrate}
+        onTogglePlay={(item) => handleTogglePlay(item, 'crate')}
+        activePreviewKey={activePreviewKey}
+        onOutboundClick={handleOutboundClick}
+      />
 
       {showConsent && phase !== 'landing' && (
         <ConsentBanner onAccept={() => setShowConsent(false)} />
