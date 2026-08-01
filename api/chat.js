@@ -88,8 +88,29 @@ function extractStructuredData(replyText) {
   try {
     parsed = JSON.parse(match[1]);
   } catch (err) {
+    // BUG THIS GUARDS AGAINST: Groove occasionally narrates a self-correction
+    // INSIDE a JSON string value, e.g. "explanation":"Not allowed, replacing."
+    // That breaks the JSON structure. Previously a parse failure here meant the
+    // ENTIRE reply broke — no cards, no follow-up, nothing rendered — on top
+    // of an uncaught-looking error in the Vercel logs during a live session.
+    //
+    // The prompt now has an explicit rule against this (see groovePrompt.js,
+    // "Never self-correct INSIDE the JSON either"), but a prompt rule is
+    // guidance, not a guarantee. This is the code-level backstop: salvage
+    // whatever plain conversational text existed before the broken block, so
+    // the user gets SOMETHING instead of a dead turn.
     console.error('Failed to parse metadata block:', err, match[1]);
-    return { ...empty, cleanedReply: replyText.replace(match[0], '').trimEnd() };
+
+    const markerStart = replyText.indexOf(match[0]);
+    const salvageableText =
+      markerStart > 0 ? replyText.slice(0, markerStart).trim() : '';
+
+    return {
+      ...empty,
+      cleanedReply:
+        salvageableText ||
+        "Sorry, I got tangled up putting that together. Mind asking again?",
+    };
   }
 
   // Strip EVERYTHING from the start of the first metadata marker onward, not
