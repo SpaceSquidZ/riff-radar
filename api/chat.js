@@ -60,6 +60,7 @@ function extractStructuredData(replyText) {
     arcBeatDelivered: false,
     askOffered: false,
     askAnswered: false,
+    inputTrack: null,
     cleanedReply: replyText,
   };
 
@@ -114,6 +115,10 @@ function extractStructuredData(replyText) {
     arcBeatDelivered: parsed.arcBeatDelivered === true,
     askOffered: parsed.askOffered === true,
     askAnswered: parsed.askAnswered === true,
+    inputTrack:
+      parsed.inputTrack?.track && parsed.inputTrack?.artist
+        ? { track: parsed.inputTrack.track, artist: parsed.inputTrack.artist }
+        : null,
     cleanedReply: cleaned,
   };
 }
@@ -171,10 +176,10 @@ else. Which one depends on whether you gave recommendations.
 
 ## A. Turns WITH recommendations
 Exactly SIX candidates, ranked best first. Array order IS the ranking.
-<!--RIFF_RADAR_RECS:{"candidates":[{"track":"Song Title","artist":"Artist Name","connectionType":"same_hand","distant":false,"tier":"scene","genre":"Genre tag","region":"Country of origin","explanation":"One sentence, 20 words or fewer, naming the connection concretely."}],"followUpQuestion":"Your closing beat.","arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
+<!--RIFF_RADAR_RECS:{"candidates":[{"track":"Song Title","artist":"Artist Name","connectionType":"same_hand","distant":false,"tier":"scene","genre":"Genre tag","region":"Country of origin","explanation":"One sentence, 20 words or fewer, naming the connection concretely."}],"inputTrack":{"track":"What they named","artist":"Artist"},"followUpQuestion":"Your closing beat.","arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
 
 ## B. Turns WITHOUT recommendations (pure conversation)
-<!--RIFF_RADAR_META:{"arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
+<!--RIFF_RADAR_META:{"inputTrack":{"track":"What they named","artist":"Artist"},"arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
 
 Field rules:
 
@@ -189,6 +194,10 @@ Field rules:
 "region" is the artist's country of origin as a plain English name ("Brazil", "Nigeria", "Japan", "France", "USA", "UK"). This routes validation to the right regional catalog, so be accurate. Use "USA" if unsure.
 
 "explanation" MUST be exactly one sentence, 20 words or fewer, plain text, no markdown. Name the connection concretely: who the shared producer is, which move recurs, what the mechanism does.
+
+"inputTrack" — include this on ANY turn where the user names or clearly refers to a specific song of their own, whether or not you are giving recommendations. Format: {"track":"Song Title","artist":"Artist Name"}. Omit the field entirely if they have not named one.
+
+Give your best reading of what they meant, in the catalog's likely spelling. "that bolden track" becomes {"track":"Talk to me.","artist":"Bolden."} if that is what you believe they mean. The app verifies it against a real catalog and shows the user a small card so they can correct you, so a confident guess is more useful than omitting the field. Do NOT include a track they are only discussing in the abstract, and do NOT include one of your own recommendations.
 
 "followUpQuestion" is your CLOSING BEAT, not a menu. Two things in order:
   1. ONE warm or curious sentence about THE USER or THE MOMENT THEY SHARED, not about a
@@ -711,6 +720,7 @@ export default async function handler(req, res) {
       arcBeatDelivered,
       askOffered,
       askAnswered,
+      inputTrack,
       cleanedReply,
     } = extractStructuredData(rawReplyText);
 
@@ -862,6 +872,56 @@ export default async function handler(req, res) {
       }
     }
 
+    // --- input track: verify what Groove thought they meant -----------------
+    //
+    // RESTORES A REGRESSION. Deleting the form removed the only thing that set
+    // sourceTrack, so lookupTrackFacts stopped running and title-collision
+    // grounding went dead. That guard exists because of a real failure: given
+    // "Blue in Green" by a modern Japanese artist, Groove pattern-matched the
+    // 1959 Miles Davis standard and anchored all three recommendations to the
+    // wrong song.
+    //
+    // Extraction happens in his reply, so the FIRST turn of a conversation is
+    // still ungrounded. Verifying here means the card shows the catalog's
+    // answer rather than his guess, and the next turn is grounded.
+    let verifiedInputTrack = null;
+    if (inputTrack?.track && inputTrack?.artist) {
+      const hint = clientLanguageHint || detectLanguageHint(messages);
+      let facts = null;
+      try {
+        facts = await lookupTrackFacts(inputTrack.track, inputTrack.artist, hint);
+      } catch (err) {
+        console.error('Input track lookup failed (non-fatal):', err?.message || err);
+      }
+
+      verifiedInputTrack = {
+        // What Groove read, kept so the client can show a correction affordance
+        // against the thing the user actually typed about.
+        track: facts?.trackName || inputTrack.track,
+        artist: facts?.artistName || inputTrack.artist,
+        confidence: facts?.confidence || 'unverified',
+        genre: facts?.genre || null,
+        year: facts?.releaseYear || null,
+      };
+
+      console.log(
+        `[input] "${inputTrack.track}" by ${inputTrack.artist} -> ${verifiedInputTrack.confidence}`
+      );
+
+      if (sessionId) {
+        logEventSafe(
+          sessionId,
+          'input_track_identified',
+          {
+            track: verifiedInputTrack.track,
+            artist: verifiedInputTrack.artist,
+            confidence: verifiedInputTrack.confidence,
+          },
+          isTester
+        );
+      }
+    }
+
     // The client persists progress from these fields. An ask id is only sent
     // when Groove CONFIRMS he asked it, not merely because the server put it in
     // his context. Reporting it on offer alone burned six asks across two test
@@ -874,6 +934,7 @@ export default async function handler(req, res) {
         askOfferedId: askOffered && offeredAsk ? offeredAsk.id : null,
         askOfferedText: askOffered && offeredAsk ? offeredAsk.text : null,
         askAnsweredId: askAnswered && pendingAskId ? pendingAskId : null,
+        inputTrack: verifiedInputTrack,
       }) + '\n'
     );
     res.end();
