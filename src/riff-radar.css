@@ -590,14 +590,12 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   border-color: #4a90d9;
 }
 
-/* --- Opener records ---
-   Records Groove has on, NOT recommendations (D-025). Visually distinct from
-   .rec-row on purpose: if the opener looks like a rec card, the distinction
-   between "what I have on" and "what I found for you" collapses and the user
-   reads the opener as unrequested recommendations.
-
-   Quieter than a rec card. No white fill, no pill, no explanation. These sit
-   in the room rather than being handed to you.
+/* --- Opener records: container ---
+   Layout wrapper for the two records Groove has on (D-025). The individual
+   card styling now MATCHES .rec-row exactly (see ".opener-record" further
+   below) per a later decision: the copy already distinguishes "what I have
+   on" from "what I found for you," so visual difference was redundant.
+   This block only sizes the list; it does not style the cards themselves.
 */
 .opener-records {
   display: flex;
