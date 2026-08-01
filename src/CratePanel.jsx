@@ -79,6 +79,8 @@ export default function CratePanel({
   onTogglePlay,
   activePreviewKey,
   onOutboundClick,
+  lastRemoved,
+  onUndoRemove,
 }) {
   const count = items.length;
 
@@ -98,6 +100,18 @@ export default function CratePanel({
       </button>
 
       {open && <div className="crate-scrim" onClick={onClose} aria-hidden="true" />}
+
+      {/* Not nested inside the drawer: a misclick should be recoverable even if
+          the drawer gets closed right after, which is a natural thing to do
+          right after removing something you meant to keep. */}
+      {lastRemoved && (
+        <div className="crate-undo-toast" role="status">
+          <span className="crate-undo-text">Removed "{lastRemoved.track}"</span>
+          <button type="button" className="crate-undo-button" onClick={onUndoRemove}>
+            Undo
+          </button>
+        </div>
+      )}
 
       <aside
         className={`crate-drawer${open ? ' crate-drawer-open' : ''}`}

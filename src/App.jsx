@@ -76,6 +76,7 @@ export default function App() {
   // day, which is what it is. Cross-session persistence needs accounts.
   const [crate, setCrate] = useState(() => readCrate());
   const [crateOpen, setCrateOpen] = useState(false);
+  const [lastRemoved, setLastRemoved] = useState(null);
   // Counts only USER messages. Arc beats and pool asks are suppressed until
   // this reaches 2, so turn one is just the opener and one real exchange.
   const userTurnCountRef = useRef(0);
@@ -245,9 +246,31 @@ export default function App() {
     });
   }
 
+  // Removed items are held briefly so an accidental click can be undone. This
+  // is a toast pattern rather than a permanent "recently removed" list: it
+  // solves the actual problem (a misclick) without adding a second list the
+  // drawer has to explain.
+  const undoTimerRef = useRef(null);
+
   function handleRemoveFromCrate(item) {
     const key = crateKey(item);
     setCrate((prev) => prev.filter((c) => crateKey(c) !== key));
+    setLastRemoved(item);
+
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = setTimeout(() => setLastRemoved(null), 6000);
+  }
+
+  function handleUndoRemove() {
+    if (!lastRemoved) return;
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setCrate((prev) => {
+      // Guards against double-adding if they saved the same track again by
+      // hand before hitting undo.
+      if (prev.some((c) => crateKey(c) === crateKey(lastRemoved))) return prev;
+      return [...prev, lastRemoved];
+    });
+    setLastRemoved(null);
   }
 
   function handleOpenCrate() {
@@ -711,6 +734,8 @@ export default function App() {
         onTogglePlay={(item) => handleTogglePlay(item, 'crate')}
         activePreviewKey={activePreviewKey}
         onOutboundClick={handleOutboundClick}
+        lastRemoved={lastRemoved}
+        onUndoRemove={handleUndoRemove}
       />
 
       {showConsent && phase !== 'landing' && (

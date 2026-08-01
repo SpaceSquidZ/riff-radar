@@ -1618,3 +1618,63 @@ body {
     padding: 10px 6px 11px 5px;
   }
 }
+
+/* Undo toast for an accidental crate removal. Deliberately NOT nested inside
+   the drawer: closing the drawer right after removing something is a natural
+   next move, and the toast should survive that. */
+.crate-undo-toast {
+  position: fixed;
+  left: 16px;
+  bottom: 20px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px 9px 14px;
+  background: #24262e;
+  border: 1px solid #3a3d48;
+  border-radius: 8px;
+  color: #d8d3c6;
+  font-size: 12.5px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  animation: crate-toast-in 0.18s ease;
+}
+
+@keyframes crate-toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.crate-undo-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.crate-undo-button {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: #8fb8e8;
+  font-weight: 600;
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.crate-undo-button:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 700px) {
+  .crate-undo-toast {
+    left: 12px;
+    right: 12px;
+    bottom: 76px;
+  }
+  .crate-undo-text {
+    max-width: none;
+    flex: 1;
+  }
+}
