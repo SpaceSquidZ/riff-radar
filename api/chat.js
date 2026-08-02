@@ -43,6 +43,7 @@ import {
 } from '../src/groovePrompt.js';
 import { logEvent } from '../src/supabaseClient.js';
 import { validateOneTrack, lookupTrackFacts } from './lib/validateTracks.js';
+import { getCandidatePool, resolveSeedArtist } from './lib/lastfm.js';
 
 export const config = {
   maxDuration: 60,
@@ -726,8 +727,44 @@ export default async function handler(req, res) {
       }
     }
 
+    // --- Last.fm candidate pool ---------------------------------------------
+    //
+    // Seeded from whatever the user is CURRENTLY orbiting, not what they
+    // arrived with. "More like the second one" means they have moved, and a
+    // pool still anchored to the original artist stops covering the actual
+    // conversation.
+    //
+    // Fails open by design: null pool means Groove generates from memory
+    // exactly as before. Never let an optimisation break a reply.
+    let candidatePool = null;
+    const seedArtist = resolveSeedArtist(sourceTrack, previousRecommendations);
+    if (seedArtist) {
+      try {
+        candidatePool = await getCandidatePool(seedArtist);
+      } catch (err) {
+        console.error('Candidate pool fetch failed (non-fatal):', err?.message || err);
+      }
+    }
+
+    // Rebuild the addendum now that the pool is known. getLoreAddendum is pure,
+    // so calling it twice is cheap, and this keeps the pool fetch off the path
+    // of everything that does not depend on it.
+    const loreAddendumWithPool = getLoreAddendum(daysSeen, {
+      deliveredArcBeats,
+      deliveredLoreLines,
+      offeredAsks,
+      answeredAsks,
+      daysSinceLast,
+      pendingQuestion,
+      artistsThisConvo,
+      recLanguage,
+      userTurnCount,
+      openerPair,
+      candidatePool,
+    });
+
     const systemBlocks = buildSystemBlocks(
-      loreAddendum,
+      loreAddendumWithPool,
       sourceFacts,
       sourceTrack,
       previousRecommendations
@@ -759,6 +796,22 @@ export default async function handler(req, res) {
             types: candidates.map((c) => c.connectionType),
             tiers: candidates.map((c) => c.tier),
             distant_count: candidates.filter((c) => c.distant).length,
+            // The whole point of the Last.fm work is whether a pool improves
+            // validation survival. Recording pool presence and how many
+            // candidates actually came from it is what makes that measurable
+            // rather than a matter of impression.
+            pool_used: !!candidatePool,
+            pool_seed: candidatePool?.seed || null,
+            pool_size: candidatePool?.artists?.length || 0,
+            from_pool_count: candidatePool
+              ? candidates.filter((c) =>
+                  candidatePool.artists.some(
+                    (a) =>
+                      (a.name || '').toLowerCase().trim() ===
+                      (c.artist || '').toLowerCase().trim()
+                  )
+                ).length
+              : 0,
           },
           isTester
         );
@@ -834,12 +887,23 @@ export default async function handler(req, res) {
 
       enrichedRecs = surfaced;
 
+      const fromPool = candidatePool
+        ? candidates.filter((c) =>
+            candidatePool.artists.some(
+              (a) =>
+                (a.name || '').toLowerCase().trim() ===
+                (c.artist || '').toLowerCase().trim()
+            )
+          ).length
+        : 0;
+
       console.log(
         `[recs] generated=${candidates.length} validated_ok=${
           validated.length - failed.length
         } surfaced=${surfaced.length} ranks=[${surfaced
           .map((r) => r._rank)
-          .join(',')}] types=[${surfaced.map((r) => r.connectionType).join(',')}]`
+          .join(',')}] types=[${surfaced.map((r) => r.connectionType).join(',')}]` +
+          ` pool=${candidatePool ? `${fromPool}/${candidates.length}` : 'none'}`
       );
     }
 

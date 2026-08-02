@@ -587,9 +587,53 @@ export function getLoreAddendum(daysSeen = 0, context = {}) {
     recLanguage = null,
     userTurnCount = 99,
     openerPair = null,
+    candidatePool = null,
   } = context;
 
   let out = '\n\n';
+
+  // --- artists confirmed to exist -----------------------------------------
+  //
+  // WHY: on 2026-08-01 five of six candidates failed iTunes validation, and
+  // the failures were fabrications rather than formatting mismatches: an Eno
+  // album credited to Laraaji, invented Satoshi Ashikawa titles, a Spoon track
+  // that does not exist. The SCENE quota (D-021) pushes generation into the
+  // thinnest part of the model's training data, where it pattern-completes
+  // plausible names instead of recalling real ones.
+  //
+  // This is a safety net UNDER his judgment, not a replacement for it. The
+  // wording is deliberately permissive: hard-constraining him to the list
+  // would flatten recommendations into "artists whose audiences overlap,"
+  // which is collaborative filtering, which is exactly what D-009 decided not
+  // to compete on. Last.fm supplies names. Groove supplies the connection.
+  if (candidatePool?.artists?.length) {
+    const lines = candidatePool.artists
+      .map((a) => {
+        if (a.listeners == null) return `- ${a.name}`;
+        const listeners = a.listeners.toLocaleString('en-US');
+        const hint =
+          a.tierHint === 'wide'
+            ? ' (widely known)'
+            : a.tierHint === 'scene'
+            ? ' (scene-level)'
+            : '';
+        return `- ${a.name} — ${listeners} listeners${hint}`;
+      })
+      .join('\n');
+
+    out += `# Artists in range tonight
+These artists all provably exist and are related to what is being discussed. They are ordered by how closely their audiences overlap with ${candidatePool.seed}. Listener counts are included where known so you can judge tier honestly.
+
+${lines}
+
+Prefer these when one genuinely fits. You know the catalogue far better than this list does, so go outside it when you have a better connection — but if you do, be certain both the artist and the track are real.
+
+Two things this list is NOT. It is not a ranking: audience overlap is not the same as any of your connection types, and a high-overlap artist may have no interesting relationship to the source at all. And it is not a set of recommendations: choosing, naming the connection, and explaining it are still entirely yours.
+
+On tier: listener counts here are ARTIST-level. Tier is a property of the TRACK. A widely known artist's forgotten record is still SCENE. Use the numbers as a sanity check, not as the answer.
+
+`;
+  }
 
   // --- session context, not lore ------------------------------------------
 
