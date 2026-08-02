@@ -416,7 +416,21 @@ export default function App() {
             // Groove read a track out of what they typed and the server
             // verified it. Attaching it to the USER's message rather than his
             // reply puts the label next to the thing it describes.
-            if (event.inputTrack) {
+            //
+            // BUG THIS FIXES: this used to fire on every turn where the server
+            // returned inputTrack at all, including turns where the track was
+            // identical to what was already confirmed. Since Groove reports
+            // inputTrack whenever a track is being discussed (not only when it
+            // is newly named), a multi-turn conversation about the same song
+            // showed the "ON THE TABLE" card again on every reply. The card
+            // should mark a NEW confirmation, not restate an old one.
+            const isSameAsCurrent =
+              event.inputTrack &&
+              sourceTrack &&
+              event.inputTrack.track === sourceTrack.track &&
+              event.inputTrack.artist === sourceTrack.artist;
+
+            if (event.inputTrack && !isSameAsCurrent) {
               setSourceTrack({
                 track: event.inputTrack.track,
                 artist: event.inputTrack.artist,
