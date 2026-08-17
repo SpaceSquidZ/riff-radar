@@ -30,3 +30,5 @@ dist-ssr
 groove_opener_pairs.md
 opener_validation_results.json
 validate_opener_pairs.py
+lastfm_spike_results.json
+scripts/lastfm_spike.py
