@@ -254,19 +254,25 @@ export async function getCandidatePool(artistName) {
 /**
  * Which artist should seed the pool this turn.
  *
- * The pool has to follow the thread. If someone says "more like the second
- * one," they have stopped orbiting what they arrived with — and a pool still
- * seeded from the original artist stops covering what is actually being
- * discussed. Three turns down a rabbit hole the drift compounds and the
- * safety net is protecting the wrong thing.
+ * The pool has to follow the thread. sourceTrack carries the artist the
+ * server most recently confirmed the user is actually discussing right now
+ * (client-side, it is updated from the verified inputTrack at the end of
+ * EVERY turn where one is named, not only turns with recommendations). It is
+ * the freshest signal available.
  *
- * Most recently recommended artist wins, because that is what a follow-up
- * almost always refers to. Falls back to what they brought in.
+ * previousRecommendations only advances on turns that produced recs, so on a
+ * turn where the user pivots to a new artist without asking for picks,
+ * sourceTrack updates but previousRecommendations does not. Preferring
+ * previousRecommendations there seeds the pool from an artist the
+ * conversation has already left — one turn behind. sourceTrack wins;
+ * previousRecommendations is the fallback for turns where no track was
+ * confirmed at all (e.g. a bare "more like that" with nothing new named).
  */
 export function resolveSeedArtist(sourceTrack, previousRecommendations = []) {
+  if (sourceTrack?.artist) return sourceTrack.artist;
   if (previousRecommendations.length > 0) {
     const last = previousRecommendations[previousRecommendations.length - 1];
     if (last?.artist) return last.artist;
   }
-  return sourceTrack?.artist || null;
+  return null;
 }

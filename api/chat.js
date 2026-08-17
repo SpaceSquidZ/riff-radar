@@ -54,6 +54,16 @@ const RECS_MARKER = '<!--RIFF_RADAR_RECS:';
 const META_MARKER = '<!--RIFF_RADAR_META:';
 const HOLDBACK_CHARS = 24;
 
+function salvage(replyText, empty, matchText) {
+  const markerStart = replyText.indexOf(matchText);
+  const salvageableText = markerStart > 0 ? replyText.slice(0, markerStart).trim() : '';
+  return {
+    ...empty,
+    cleanedReply:
+      salvageableText || "Sorry, I got tangled up putting that together. Mind asking again?",
+  };
+}
+
 function extractStructuredData(replyText) {
   const empty = {
     candidates: [],
@@ -65,16 +75,15 @@ function extractStructuredData(replyText) {
     cleanedReply: replyText,
   };
 
-  // BUG: the model occasionally self-corrects mid-generation ("wait, let me
-  // fix that, I repeated an artist") and emits a SECOND metadata block after
-  // the first. A regex without the global flag returns the first match, which
-  // is the abandoned draft, and everything after it (including the correction
-  // text and the real block) streams through as visible text.
-  //
-  // Matching greedily to the LAST occurrence picks whichever block he actually
-  // meant to stand by. This is a safety net, not a fix for the root cause: the
-  // real fix is the instruction below telling him not to self-correct in the
-  // open at all.
+  // The model occasionally self-corrects mid-generation ("wait, let me fix
+  // that, I repeated an artist") and emits a SECOND metadata block after the
+  // first. STATIC_APP_INSTRUCTIONS now explicitly forbids this (see "EXACTLY
+  // ONE, no exceptions"), and the streaming layer in streamClaudeReply never
+  // shows the user anything from the first marker onward regardless of what
+  // follows it. This matching is the last line of defense for CARD DATA if
+  // that prompt rule is ever violated anyway: matching greedily to the LAST
+  // *closed* occurrence picks whichever block he actually meant to stand by,
+  // rather than the abandoned draft a non-global regex would return.
   const recsMatches = [...replyText.matchAll(/<!--RIFF_RADAR_RECS:(\{.*?\})-->/gs)];
   const metaMatches = [...replyText.matchAll(/<!--RIFF_RADAR_META:(\{.*?\})-->/gs)];
   const match = recsMatches.length
@@ -84,6 +93,26 @@ function extractStructuredData(replyText) {
     : null;
 
   if (!match) return empty;
+
+  // BUG THIS GUARDS AGAINST: self-correcting means writing the metadata block
+  // TWICE inside the same fixed max_tokens budget. If the corrected block gets
+  // cut off before its own closing "-->", it never appears in recsMatches at
+  // all, and `match` above silently falls back to the ABANDONED draft — the
+  // one carrying whatever mistake (e.g. a repeated artist) triggered the
+  // correction in the first place. Its candidates then survive validation
+  // fine (they're real, just poorly chosen) and dedup logic collapses them
+  // down to a lone card, which reads as "5 of 6 valid recommendations vanished"
+  // even though nothing downstream actually did anything wrong.
+  //
+  // A marker START appearing anywhere after the block we are about to use
+  // means the model was still mid-correction when the reply ended and never
+  // got to stand behind THIS block either. Treat that as an unrecoverable
+  // turn rather than silently shipping the discarded draft.
+  const tailAfterMatch = replyText.slice(match.index + match[0].length);
+  if (/<!--RIFF_RADAR_(RECS|META):/.test(tailAfterMatch)) {
+    console.error('Metadata block was superseded by a later, unclosed block:', match[0]);
+    return salvage(replyText, empty, match[0]);
+  }
 
   let parsed = {};
   try {
@@ -95,23 +124,13 @@ function extractStructuredData(replyText) {
     // ENTIRE reply broke — no cards, no follow-up, nothing rendered — on top
     // of an uncaught-looking error in the Vercel logs during a live session.
     //
-    // The prompt now has an explicit rule against this (see groovePrompt.js,
-    // "Never self-correct INSIDE the JSON either"), but a prompt rule is
-    // guidance, not a guarantee. This is the code-level backstop: salvage
-    // whatever plain conversational text existed before the broken block, so
-    // the user gets SOMETHING instead of a dead turn.
+    // The prompt has an explicit rule against this (see groovePrompt.js,
+    // "Decide before you write JSON, never while writing it"), but a prompt
+    // rule is guidance, not a guarantee. This is the code-level backstop:
+    // salvage whatever plain conversational text existed before the broken
+    // block, so the user gets SOMETHING instead of a dead turn.
     console.error('Failed to parse metadata block:', err, match[1]);
-
-    const markerStart = replyText.indexOf(match[0]);
-    const salvageableText =
-      markerStart > 0 ? replyText.slice(0, markerStart).trim() : '';
-
-    return {
-      ...empty,
-      cleanedReply:
-        salvageableText ||
-        "Sorry, I got tangled up putting that together. Mind asking again?",
-    };
+    return salvage(replyText, empty, match[0]);
   }
 
   // Strip EVERYTHING from the start of the first metadata marker onward, not
@@ -195,6 +214,16 @@ in #2 and respond normally.
 # Hidden metadata (internal, NEVER shown to the user)
 EVERY response ends with exactly ONE metadata comment on its own line, after everything
 else. Which one depends on whether you gave recommendations.
+
+EXACTLY ONE, no exceptions, even if you spot a mistake after finishing it — a repeated
+artist, a wrong connection type, anything. Do NOT write a second metadata comment to
+replace the first, and do NOT narrate the mistake in your visible reply ("wait, let me
+give you real picks instead", "actually, let me fix that"). Both failures leak straight
+into the chat window verbatim; the user has seen raw JSON and mid-sentence corrections
+because of this before. If you notice a problem after the block is closed, it is too
+late to fix in this turn. Leave the block as written and let validation silently drop
+whatever does not hold up. A single flawed block is invisible to the user. A visible
+correction is not.
 
 ## A. Turns WITH recommendations
 Exactly SIX candidates, ranked best first. Array order IS the ranking.
@@ -388,7 +417,6 @@ async function streamClaudeReply({ messages, systemBlocks, res }) {
   let fullText = '';
   let emittedLength = 0;
   let markerStart = -1;
-  let markerEnd = -1;
   let markerResolved = false;
   let stopReason = null;
   const usage = { input: null, output: null, cacheRead: null, cacheWrite: null };
@@ -400,18 +428,23 @@ async function streamClaudeReply({ messages, systemBlocks, res }) {
     if (safe) res.write(JSON.stringify({ type: 'delta', text: safe }) + '\n');
   }
 
-  // BUG THIS FIXES: the previous version assumed the metadata comment was the
-  // LAST thing in the reply. It found '<!--', flushed everything before it, and
-  // treated the entire remainder as metadata. When the model put the block
-  // first or mid-reply, every visible character after it was silently dropped,
-  // producing an assistant turn with no text at all.
+  // The v2a protocol guarantees the metadata comment is the LAST thing in the
+  // reply, on every turn (see the header comment above). So once the first
+  // '<!--' is seen, nothing legitimate follows it — everything before the
+  // marker is real visible text, and everything from the marker onward is
+  // metadata and must never be streamed to the client.
   //
-  // v2a made this much more likely, because a metadata block is now required on
-  // EVERY turn including pure conversation, so there is no longer a strong
-  // positional convention holding it at the end.
-  //
-  // This version tracks the marker's start AND its '-->' close, and emits text
-  // on both sides of it.
+  // BUG THIS FIXES: an earlier version of this function tracked the marker's
+  // '-->' close and RESUMED streaming anything after it, on the theory that
+  // Groove might still have visible text trailing the block. He should not,
+  // under the current protocol — but when he malformed a reply by
+  // self-correcting mid-generation (narrating "wait, let me fix that" and
+  // emitting a SECOND metadata block), that resume logic streamed the
+  // narration and the raw second block straight to the user as if it were
+  // normal prose. This version never resumes: once markerStart is found, the
+  // only thing further processing does is detect RECS vs META (for the
+  // recs_starting event) and keep buffering fullText for the final extraction
+  // extractStructuredData runs on the complete text.
   function processDeltaText(deltaText) {
     fullText += deltaText;
 
@@ -429,7 +462,8 @@ async function streamClaudeReply({ messages, systemBlocks, res }) {
       return;
     }
 
-    // Everything before the marker is real text. Flush it once.
+    // Everything before the marker is real text. Flush it once, and never
+    // flush anything from the marker onward.
     if (emittedLength < markerStart) {
       flushRange(emittedLength, markerStart);
       emittedLength = markerStart;
@@ -442,21 +476,6 @@ async function streamClaudeReply({ messages, systemBlocks, res }) {
       const candidate = fullText.slice(markerStart, markerStart + RECS_MARKER.length);
       if (candidate === RECS_MARKER) {
         res.write(JSON.stringify({ type: 'recs_starting' }) + '\n');
-      }
-    }
-
-    if (markerEnd === -1) {
-      const closeIdx = fullText.indexOf('-->', markerStart);
-      if (closeIdx !== -1) markerEnd = closeIdx + 3;
-    }
-
-    // Marker has closed. Skip past it and resume emitting anything after.
-    if (markerEnd !== -1) {
-      if (emittedLength < markerEnd) emittedLength = markerEnd;
-      const safeEnd = Math.max(markerEnd, fullText.length - HOLDBACK_CHARS);
-      if (safeEnd > emittedLength) {
-        flushRange(emittedLength, safeEnd);
-        emittedLength = safeEnd;
       }
     }
   }
@@ -500,13 +519,11 @@ async function streamClaudeReply({ messages, systemBlocks, res }) {
     }
   }
 
-  // Final flush. Emit whatever is left that is not inside the marker.
-  if (emittedLength < fullText.length) {
-    const noMarker = markerStart === -1;
-    const pastMarker = markerEnd !== -1 && emittedLength >= markerEnd;
-    if (noMarker || pastMarker) {
-      flushRange(emittedLength, fullText.length);
-    }
+  // Final flush. Only when no marker ever appeared — anything from the
+  // marker onward is metadata (or a malformed self-correction) and must
+  // never reach the client, no matter how the stream ended.
+  if (emittedLength < fullText.length && markerStart === -1) {
+    flushRange(emittedLength, fullText.length);
     emittedLength = fullText.length;
   }
 
