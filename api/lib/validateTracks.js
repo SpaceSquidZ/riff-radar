@@ -21,8 +21,15 @@
 //      when it recommends the track; this routes validation to that store.
 //
 // Outcomes per track:
-//   'found'            — real, artist matches, has a preview
-//   'found_no_preview' — real, artist matches, no preview clip anywhere
+//   'found'            — real, artist AND title match, has a preview
+//   'found_no_preview' — real, artist AND title match, no preview clip anywhere
+//   'wrong_title'      — the ARTIST is real but no result's TITLE matches. The
+//                        recommended track is not confirmable, so it must not
+//                        ship. Distinguished from 'not_found' because the two
+//                        say different things about generation quality: a
+//                        fabricated ARTIST is a different failure from a real
+//                        artist with a fabricated TRACK, and Roadmap v2 Wave 1
+//                        asks for both to be measurable.
 //   'not_found'        — no artist match in ANY searched store
 //   'unconfirmed'      — every iTunes request itself failed (network/5xx)
 //
@@ -172,6 +179,9 @@ function similarity(a, b) {
 // "zayn"/"zayn keoh" is 0.44 and fails.
 const SUBSTRING_LENGTH_RATIO = 0.6;
 const FUZZY_SIMILARITY_FLOOR = 0.85;
+// Titles carry more characters than artist names, so the same proportional
+// distance represents a larger real difference. Held tighter on purpose.
+const TITLE_SIMILARITY_FLOOR = 0.9;
 
 function oneArtistMatches(a, b) {
   const na = normalizeArtist(a);
@@ -260,13 +270,17 @@ export async function validateOneTrack(rec, languageHint) {
   const storeResults = await Promise.all(stores.map((c) => searchStore(term, c)));
 
   let anyRequestSucceeded = false;
-  const artistMatches = [];
+  const artistMatches = [];  // artist matches, title not yet considered
+  const fullMatches = [];    // artist AND title match — the only shippable set
 
   for (const results of storeResults) {
     if (results === null) continue;
     anyRequestSucceeded = true;
     for (const r of results) {
-      if (artistsMatch(r.artistName, rec.artist)) artistMatches.push(r);
+      if (!artistsMatch(r.artistName, rec.artist)) continue;
+      artistMatches.push(r);
+      // THE FIX (see block comment below): the title has to match too.
+      if (titlesMatch(r.trackName, rec.track)) fullMatches.push(r);
     }
   }
 
@@ -281,8 +295,37 @@ export async function validateOneTrack(rec, languageHint) {
     return { status: 'not_found', enriched: null };
   }
 
-  const withPreview = artistMatches.find((m) => m.previewUrl);
-  const best = withPreview || artistMatches[0];
+  // BUG THIS FIXES (observed live 2026-08-21)
+  //
+  // This function used to accept a result on ARTIST MATCH ALONE. iTunes search
+  // is a relevance ranker, not an exact lookup: ask it for a track that does
+  // not exist and it cheerfully returns whatever else that artist has. The
+  // artist check passed, so the candidate was marked 'found' and shipped as a
+  // real card — carrying a DIFFERENT song's preview clip, artwork, release year
+  // and store link, all under the recommended title.
+  //
+  // A live MIKE session produced roughly eight of these in one conversation:
+  // "Vase" by MAVI rendered from "Quanne Se Fa Notte", "Nu Sha" by Wu-Tang from
+  // "Gravel Pit", "Duels" by GZA from "Living in the World Today", and so on.
+  // Every card was internally consistent and every card was wrong.
+  //
+  // This is precisely Roadmap v2 R2, "wrong-match is a trust cliff, not a
+  // slope", whose Wave 1 mitigation lists TITLE SUFFIX REJECTION alongside the
+  // artist string distance that did get built. The artist half shipped (see
+  // artistsMatch and scripts/test-artist-match.mjs); the title half did not.
+  // lookupTrackFacts already does this correctly for the user's OWN track, and
+  // says so at length — this brings the recommendation path to parity.
+  //
+  // titlesMatch is deliberately lenient about decoration (remasters, live
+  // versions, "(feat. X)") and strict about the actual words, so legitimate
+  // catalogue variance still passes.
+  if (fullMatches.length === 0) {
+    cacheSet(cacheKey, { found: false, confidence: 'wrong_title' });
+    return { status: 'wrong_title', enriched: null };
+  }
+
+  const withPreview = fullMatches.find((m) => m.previewUrl);
+  const best = withPreview || fullMatches[0];
   const status = withPreview ? 'found' : 'found_no_preview';
 
   const enriched = {
@@ -357,7 +400,17 @@ function normalizeTitle(name) {
     .replace(/\([^)]*\)/g, ' ')      // (Remastered), (feat. X), (Live)
     .replace(/\[[^\]]*\]/g, ' ')     // [Explicit]
     .replace(/\s-\s.*$/, ' ')        // " - 2011 Remaster"
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ') // punctuation, keeping any alphabet
+    // Fold accents. iTunes stores "Yèkèrmo Sèw"; Groove and users both write
+    // "Yekermo Sew". artistsMatch already survives this via its fuzzy floor,
+    // but titles had no equivalent, so the Mulatu Astatke entry in the opener
+    // pool would fail a strict title check against its own catalogue listing.
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    // Apostrophes are DELETED rather than spaced. "Echo's Answer" typed as
+    // "Echos Answer" must still match; spacing it produces "echo s answer",
+    // which does not.
+    .replace(/['’ʼ`]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ') // remaining punctuation, keeping any alphabet
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -366,14 +419,34 @@ function normalizeTitle(name) {
 // Deliberately lenient about decoration (remasters, live versions) but strict
 // about the actual words: this is the check that stops a typo'd title from
 // silently matching a DIFFERENT song by the same artist.
-function titlesMatch(itunesTitle, userTitle) {
+// Exported so scripts/test-title-match.mjs can pin its behaviour the same way
+// scripts/test-artist-match.mjs pins artistsMatch. Roadmap v2 Wave 1 asks for
+// regression fixtures on wrong-match detection; the artist half had them from
+// the start, the title half did not.
+export function titlesMatch(itunesTitle, userTitle) {
   const a = normalizeTitle(itunesTitle);
   const b = normalizeTitle(userTitle);
   if (!a || !b) return false;
   if (a === b) return true;
-  // One containing the other covers "Song" vs "Song (Extended Version)".
-  if (a.includes(b) || b.includes(a)) return true;
-  return false;
+
+  // BOUNDED containment. The old rule was bare `a.includes(b) || b.includes(a)`
+  // — the same shape as the artist rule that let "Zayn Keoh" pass for "ZAYN"
+  // (see the WRONG-MATCH GUARD note above). In title form it means "The Kiss"
+  // matches "The Kiss of Death" and "Falling" matches "Falling Slowly": two
+  // genuinely different songs, and on the recommendation path that renders as a
+  // real card for a song nobody asked about. Reuse the same ratio bound the
+  // artist guard already uses, so containment still covers the case it was
+  // added for ("Song" vs "Song (Extended Version)") and nothing wider.
+  if (a.includes(b) || b.includes(a)) {
+    const shorter = Math.min(a.length, b.length);
+    const longer = Math.max(a.length, b.length);
+    return shorter / longer >= SUBSTRING_LENGTH_RATIO;
+  }
+
+  // Residual drift the normalizer does not catch (transliteration variants,
+  // a dropped particle). Deliberately tighter than the artist floor: titles are
+  // longer, so an equivalent proportional distance is a much bigger difference.
+  return similarity(a, b) >= TITLE_SIMILARITY_FLOOR;
 }
 
 export async function lookupTrackFacts(track, artist, languageHint) {

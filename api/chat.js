@@ -565,6 +565,17 @@ async function streamClaudeReply({ messages, systemBlocks, res }) {
 const MAX_SURFACED = 3;
 const MAX_WIDE_SURFACED = 1;
 
+// Validation outcomes that must never reach a card. 'wrong_title' joins
+// 'not_found' here: the artist is real but the recommended TRACK could not be
+// confirmed, so the enrichment we would attach (preview, artwork, year, store
+// link) belongs to a different song. Roadmap v2 R2 treats one misattributed
+// track as a trust cliff, not a slope, which is why this fails closed.
+const UNSHIPPABLE_VALIDATION = new Set(['not_found', 'wrong_title']);
+
+function isUnshippable(candidate) {
+  return UNSHIPPABLE_VALIDATION.has(candidate.itunesValidation);
+}
+
 function normalizeArtistKey(name) {
   return (name || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
 }
@@ -588,7 +599,7 @@ function selectSurfaced(validated, priorArtists = [], sourceTrack = null) {
     if (surfaced.length >= MAX_SURFACED) break;
 
     let reason = null;
-    if (c.itunesValidation === 'not_found') reason = 'validation_failed';
+    if (isUnshippable(c)) reason = 'validation_failed';
     else if (takenArtists.has(normalizeArtistKey(c.artist))) reason = 'artist_repeat';
     else if (takenTypes.has(c.connectionType)) reason = 'type_taken';
     else if (c.tier === 'wide' && wideCount >= MAX_WIDE_SURFACED) reason = 'wide_quota';
@@ -611,7 +622,7 @@ function selectSurfaced(validated, priorArtists = [], sourceTrack = null) {
     for (const c of validated) {
       if (surfaced.length >= MAX_SURFACED) break;
       if (surfaced.includes(c)) continue;
-      if (c.itunesValidation === 'not_found') continue;
+      if (isUnshippable(c)) continue;
       if (takenArtists.has(normalizeArtistKey(c.artist))) continue;
 
       surfaced.push(c);
@@ -860,15 +871,21 @@ export default async function handler(req, res) {
       const priorArtists = previousRecommendations.map((r) => r.artist).filter(Boolean);
       const { surfaced, skipped } = selectSurfaced(validated, priorArtists, sourceTrack);
 
-      const failed = validated.filter((c) => c.itunesValidation === 'not_found');
+      const failed = validated.filter(isUnshippable);
 
       if (sessionId && failed.length > 0) {
         logEventSafe(
           sessionId,
           'itunes_validation_failed',
           {
-            failed_tracks: failed.map((r) => ({ track: r.track, artist: r.artist })),
+            failed_tracks: failed.map((r) => ({
+              track: r.track,
+              artist: r.artist,
+              reason: r.itunesValidation,
+            })),
             failed_count: failed.length,
+            wrong_title_count: failed.filter((r) => r.itunesValidation === 'wrong_title')
+              .length,
             total_candidates: validated.length,
           },
           isTester
