@@ -42,7 +42,7 @@ import {
   selectAsk,
 } from '../src/groovePrompt.js';
 import { logEvent } from '../src/supabaseClient.js';
-import { validateOneTrack, lookupTrackFacts } from './lib/validateTracks.js';
+import { validateOneTrack, lookupTrackFacts, titlesMatch } from './lib/validateTracks.js';
 import { getCandidatePool, resolveSeedArtist } from './lib/lastfm.js';
 
 export const config = {
@@ -461,6 +461,47 @@ function detectLanguageHint(messages) {
   return null;
 }
 
+// Brief D, Part 2. Extended thinking was running on every turn with nobody
+// having chosen it: the request never set `thinking` at all, and on
+// claude-sonnet-5 specifically, omitting it does NOT mean "off" (that was
+// true on Opus 4.7/4.8) — it silently runs adaptive thinking, the same as
+// explicitly sending {type: "adaptive"}. That is not a deliberate choice
+// recorded anywhere; it is inheriting whatever the model's default happens to
+// be on this one model. The fix is to say what we mean.
+//
+// Checked against the current SDK/API surface before writing these: on
+// claude-sonnet-5, {type: "adaptive"} is the only "on" mode (there is no
+// numeric thinking-budget dial — `budget_tokens` is REMOVED and returns a
+// 400), and {type: "disabled"} is accepted. So only two genuinely distinct
+// arms exist for the A/B: Arm A (current behavior, made explicit) and Arm B
+// (off). A third "bounded, smallest budget" arm was requested but is not
+// expressible on this model: there is no token-budget parameter to shrink,
+// and the only other lever (`effort`) is already at its floor ("low") in Arm
+// A. Explicitly enabling adaptive thinking at effort "low" IS Arm A — it is
+// not a distinct third point. Running two arms per the brief's own
+// contingency for exactly this case.
+const THINKING_ARM = process.env.GROOVE_THINKING_ARM === 'B' ? 'B' : 'A';
+
+function thinkingConfigForArm(arm) {
+  // Arm A: current behavior, stated explicitly instead of relying on the
+  // model's undocumented-to-us omission default.
+  if (arm === 'B') return { type: 'disabled' };
+  return { type: 'adaptive' };
+}
+
+// Brief D, Part 2. Raised from 4096 regardless of the A/B outcome — this
+// ceiling is the direct, confirmed cause of the blank turns Brief A had to
+// patch around defensively (Change 1): adaptive thinking has no fixed budget
+// of its own, so on an unlucky turn it can consume the entire max_tokens
+// ceiling before emitting a single visible character, leaving nothing for
+// prose or the candidate JSON. Observed max across the Part 2 A/B run
+// (18 sessions, both thinking arms): 2284 output_tokens on one turn. 8000
+// leaves that turn ~3.5x headroom while still capping a runaway turn at
+// something a person would actually wait through, rather than sizing for
+// Part 3's not-yet-built 12-candidate case pre-emptively. Already streaming
+// (stream: true), so there is no SDK-timeout concern at this size.
+const MAX_TOKENS = 8000;
+
 async function callAnthropicStream({ messages, systemBlocks }) {
   return fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -471,7 +512,8 @@ async function callAnthropicStream({ messages, systemBlocks }) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-5',
-      max_tokens: 4096,
+      max_tokens: MAX_TOKENS,
+      thinking: thinkingConfigForArm(THINKING_ARM),
       output_config: { effort: 'low' },
       stream: true,
       system: systemBlocks,
@@ -1122,15 +1164,34 @@ export default async function handler(req, res) {
 
       enrichedRecs = surfaced;
 
-      const fromPool = candidatePool
-        ? candidates.filter((c) =>
-            candidatePool.artists.some(
-              (a) =>
-                (a.name || '').toLowerCase().trim() ===
-                (c.artist || '').toLowerCase().trim()
-            )
-          ).length
-        : 0;
+      // Brief D, Part 4. BUG THIS FIXES: the old single `pool=N/6` counted
+      // artist-name overlap only, so `pool=4/6` with `validated_ok=1` was
+      // unreadable — it could mean either "he used our data and Apple Music
+      // doesn't have it" or "he took our artist and invented a title anyway,"
+      // two different problems with two different fixes. Splitting into
+      // pool_artist (artist name matches a pool entry) and pool_track
+      // (the SAME candidate's track also matches one of that artist's real
+      // getTopTracks titles, via titlesMatch — not a naive exact-string
+      // compare, since minor formatting drift between what Groove writes and
+      // what Last.fm stored is expected and not itself a grounding failure)
+      // makes the diagnosis read off the log line directly: pool_artist=6/6
+      // pool_track=1/6 means grounding is being ignored; pool_artist=6/6
+      // pool_track=6/6 means grounding worked and the catalogue is the limit.
+      let poolArtistHits = 0;
+      let poolTrackHits = 0;
+      if (candidatePool) {
+        for (const c of candidates) {
+          const poolArtist = candidatePool.artists.find(
+            (a) =>
+              (a.name || '').toLowerCase().trim() === (c.artist || '').toLowerCase().trim()
+          );
+          if (!poolArtist) continue;
+          poolArtistHits += 1;
+          if ((poolArtist.topTracks || []).some((t) => titlesMatch(t, c.track))) {
+            poolTrackHits += 1;
+          }
+        }
+      }
 
       // Brief B, Change 3. BUG THIS FIXES: this used to fire (as
       // rec_candidates_generated) immediately after `if (candidates.length >
@@ -1170,7 +1231,8 @@ export default async function handler(req, res) {
             distant_count: candidates.filter((c) => c.distant).length,
             seed_artist: seedArtist,
             pool_size: candidatePool?.artists?.length || 0,
-            pool_hits: fromPool,
+            pool_artist_hits: poolArtistHits,
+            pool_track_hits: poolTrackHits,
             relaxation_stage: stage,
             skip_reason_counts: skipReasonCounts,
           },
@@ -1184,21 +1246,44 @@ export default async function handler(req, res) {
         } surfaced=${surfaced.length} ranks=[${surfaced
           .map((r) => r._rank)
           .join(',')}] types=[${surfaced.map((r) => r.connectionType).join(',')}]` +
-          ` pool=${candidatePool ? `${fromPool}/${candidates.length}` : 'none'}` +
+          ` pool_artist=${candidatePool ? `${poolArtistHits}/${candidates.length}` : 'none'}` +
+          ` pool_track=${candidatePool ? `${poolTrackHits}/${candidates.length}` : 'none'}` +
           // Brief A, Change 3: stage=1 means every rule held; stage=2 means the
           // type-spread rule (D-022) was relaxed to reach this count. Never
           // stage 3 — the WIDE quota (D-021) has no relaxed stage to log.
-          ` stage=${stage}`
+          ` stage=${stage}` +
+          // Brief D, Part 1: not_found/wrong_title weren't in this line before —
+          // only in the itunes_validation_failed event — so a console-log-based
+          // harness (replay.mjs, run where Supabase creds aren't available)
+          // couldn't recover them. Not otherwise used by this line's readers.
+          ` not_found=${notFoundCount} wrong_title=${wrongTitleCount}` +
+          ` pool_size=${candidatePool?.artists?.length || 0} seed=${seedArtist || 'none'}`
       );
     }
 
     // --- progress logging -------------------------------------------------
 
     if (sessionId) {
+      // Brief D, Part 1. Fields beyond content_length added so replay.mjs can
+      // derive thinking-token share on EVERY turn, including ones with no
+      // candidates at all (a pure-conversation turn, or one that hit
+      // salvage()) — those never reach rec_candidates_generated, but this
+      // event already fires unconditionally for every turn regardless.
+      // rawReplyText.length is the FULL text (prose + stripped metadata
+      // block), unlike content_length which is visible-only; the harness
+      // uses it plus output_tokens to estimate the split, since the API does
+      // not separately report thinking-vs-text token counts.
       logEventSafe(
         sessionId,
         'message_sent',
-        { role: 'assistant', content_length: cleanedReply.length },
+        {
+          role: 'assistant',
+          content_length: cleanedReply.length,
+          raw_reply_chars: rawReplyText.length,
+          output_tokens: streamUsage.output,
+          input_tokens: streamUsage.input,
+          stop_reason: streamStopReason,
+        },
         isTester
       );
 
