@@ -54,13 +54,75 @@ const RECS_MARKER = '<!--RIFF_RADAR_RECS:';
 const META_MARKER = '<!--RIFF_RADAR_META:';
 const HOLDBACK_CHARS = 24;
 
-function salvage(replyText, empty, matchText) {
+// Change 1 (Brief A, D-026: locked slots read as reception failure, never
+// permission denial — static, not padlocks). A blank turn is the same
+// failure mode as a mid-sentence dropout, so it gets the same voice: the
+// SIGNAL went missing, not Groove. Never an apology, never anything
+// technical. Several options so a user who hits this twice in one session
+// does not see the same line twice.
+//
+// This is the ONLY place that picks this line. salvage() below deliberately
+// does NOT pick one itself — it returns a true empty string when there is
+// nothing salvageable, so the blank-reply guard in the handler (which
+// already picks, logs, counts, AND STREAMS the fallback) is the single path
+// a user's screen can ever show one through. salvage() picking its own text
+// here used to be exactly the bug: it filled cleanedReply with a placeholder
+// string ("Sorry, I got tangled up putting that together...", apologetic
+// and explanatory — precisely what this rule forbids), which made
+// cleanedReply non-empty and silently defeated the handler's blank check
+// below, so NEITHER that apology NOR this fallback ever actually reached the
+// client as a delta — the user saw nothing at all, same as before Change 1
+// existed. Confirmed live on 2026-08-29 19:49:24, a JSON parse failure with
+// nothing before the marker: the log shows the parse error, but nothing was
+// ever written to the response.
+const EMPTY_REPLY_FALLBACKS = [
+  'Lost you for a second there — the line went quiet. Say that again?',
+  "Static on my end just then. What was that?",
+  "That one got away from me mid-thought. One more time?",
+  "Something cut out before I could get it to you. Try me again?",
+];
+
+function pickEmptyReplyFallback() {
+  return EMPTY_REPLY_FALLBACKS[Math.floor(Math.random() * EMPTY_REPLY_FALLBACKS.length)];
+}
+
+// Change 1, follow-up (Brief A, D-033: a shortfall is never unexplained).
+// DIFFERENT failure from a blank turn: real text already streamed — Groove's
+// opening reflection went through fine — and only THEN did the recs
+// metadata break (a parse failure, or a self-correction that never closed
+// its replacement block; see recsFailureReason in salvage() below). The user
+// already has a real, coherent reply. What is missing is just the picks that
+// should have followed it, so EMPTY_REPLY_FALLBACKS' "say that again" framing
+// is the wrong content here even though the register is right: the user does
+// not need to repeat themselves, and asking them to reads as Groove not
+// having heard something he plainly did (confirmed live: a tester repeated
+// the same question four times in a row against this exact gap). This pool
+// acknowledges the PICKS going missing specifically — same rules as Change 4
+// (D-026: reception failure, not permission denial) — still no apology, no
+// explanation, nothing technical.
+const RECS_DROPPED_FALLBACKS = [
+  'Reception dropped right as I was reaching for the picks. Try me again in a second.',
+  'Lost the feed right at the good part. One more go?',
+  'Static ate the rest of that. Give it another shot?',
+  'The signal cut out right as those were coming through. Try again in a moment?',
+];
+
+function pickRecsDroppedFallback() {
+  return RECS_DROPPED_FALLBACKS[Math.floor(Math.random() * RECS_DROPPED_FALLBACKS.length)];
+}
+
+function salvage(replyText, empty, matchText, recsFailureReason) {
   const markerStart = replyText.indexOf(matchText);
   const salvageableText = markerStart > 0 ? replyText.slice(0, markerStart).trim() : '';
   return {
     ...empty,
-    cleanedReply:
-      salvageableText || "Sorry, I got tangled up putting that together. Mind asking again?",
+    cleanedReply: salvageableText,
+    // null unless the block that broke was specifically a RECS attempt (not
+    // a META one — a pure-conversation turn breaking has no picks to miss,
+    // so it must not trigger the handler's recs-dropped recovery below).
+    // 'parse_error' or 'superseded_block' identifies WHICH of the two
+    // salvage() call sites this came from, for the distinct event/log.
+    recsFailureReason: recsFailureReason || null,
   };
 }
 
@@ -72,6 +134,8 @@ function extractStructuredData(replyText) {
     askOffered: false,
     askAnswered: false,
     inputTrack: null,
+    requestedArtists: [],
+    recsFailureReason: null,
     cleanedReply: replyText,
   };
 
@@ -86,7 +150,12 @@ function extractStructuredData(replyText) {
   // rather than the abandoned draft a non-global regex would return.
   const recsMatches = [...replyText.matchAll(/<!--RIFF_RADAR_RECS:(\{.*?\})-->/gs)];
   const metaMatches = [...replyText.matchAll(/<!--RIFF_RADAR_META:(\{.*?\})-->/gs)];
-  const match = recsMatches.length
+  // Whether the block on the table is a RECS attempt at all. A META turn
+  // breaking has no picks to miss, so its salvage() calls below must pass no
+  // recsFailureReason — only a broken RECS block should ever tell the
+  // handler to append a recs-dropped recovery line.
+  const isRecsAttempt = recsMatches.length > 0;
+  const match = isRecsAttempt
     ? recsMatches[recsMatches.length - 1]
     : metaMatches.length
     ? metaMatches[metaMatches.length - 1]
@@ -111,7 +180,7 @@ function extractStructuredData(replyText) {
   const tailAfterMatch = replyText.slice(match.index + match[0].length);
   if (/<!--RIFF_RADAR_(RECS|META):/.test(tailAfterMatch)) {
     console.error('Metadata block was superseded by a later, unclosed block:', match[0]);
-    return salvage(replyText, empty, match[0]);
+    return salvage(replyText, empty, match[0], isRecsAttempt ? 'superseded_block' : null);
   }
 
   let parsed = {};
@@ -130,7 +199,7 @@ function extractStructuredData(replyText) {
     // salvage whatever plain conversational text existed before the broken
     // block, so the user gets SOMETHING instead of a dead turn.
     console.error('Failed to parse metadata block:', err, match[1]);
-    return salvage(replyText, empty, match[0]);
+    return salvage(replyText, empty, match[0], isRecsAttempt ? 'parse_error' : null);
   }
 
   // Strip EVERYTHING from the start of the first metadata marker onward, not
@@ -160,6 +229,16 @@ function extractStructuredData(replyText) {
       parsed.inputTrack?.track && parsed.inputTrack?.artist
         ? { track: parsed.inputTrack.track, artist: parsed.inputTrack.artist }
         : null,
+    // Change 2 (Brief A, rule 5): artists the user named by name this turn,
+    // exempting them from the no-repeat check in selectSurfaced. Filtered to
+    // strings so a malformed value never reaches normalizeArtistKey downstream.
+    requestedArtists: Array.isArray(parsed.requestedArtists)
+      ? parsed.requestedArtists.filter((a) => typeof a === 'string' && a.trim())
+      : [],
+    // Extraction succeeded (whether or not candidates ended up empty — a
+    // legitimate META turn has no picks to miss either), so there is no
+    // recs failure to report here. Only salvage() ever sets this non-null.
+    recsFailureReason: null,
     cleanedReply: cleaned,
   };
 }
@@ -227,10 +306,10 @@ correction is not.
 
 ## A. Turns WITH recommendations
 Exactly SIX candidates, ranked best first. Array order IS the ranking.
-<!--RIFF_RADAR_RECS:{"candidates":[{"track":"Song Title","artist":"Artist Name","connectionType":"same_hand","distant":false,"tier":"scene","genre":"Genre tag","region":"Country of origin","explanation":"One sentence, 20 words or fewer, naming the connection concretely."}],"inputTrack":{"track":"What they named","artist":"Artist"},"followUpQuestion":"Your closing beat.","arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
+<!--RIFF_RADAR_RECS:{"candidates":[{"track":"Song Title","artist":"Artist Name","connectionType":"same_hand","distant":false,"tier":"scene","genre":"Genre tag","region":"Country of origin","explanation":"One sentence, 20 words or fewer, naming the connection concretely."}],"inputTrack":{"track":"What they named","artist":"Artist"},"requestedArtists":[],"followUpQuestion":"Your closing beat.","arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
 
 ## B. Turns WITHOUT recommendations (pure conversation)
-<!--RIFF_RADAR_META:{"inputTrack":{"track":"What they named","artist":"Artist"},"arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
+<!--RIFF_RADAR_META:{"inputTrack":{"track":"What they named","artist":"Artist"},"requestedArtists":[],"arcBeatDelivered":false,"askOffered":false,"askAnswered":false}-->
 
 Field rules:
 
@@ -249,6 +328,8 @@ Field rules:
 "inputTrack" — include this on ANY turn where the user names or clearly refers to a specific song of their own, whether or not you are giving recommendations. Format: {"track":"Song Title","artist":"Artist Name"}. Omit the field entirely if they have not named one.
 
 Give your best reading of what they meant, in the catalog's likely spelling. "that bolden track" becomes {"track":"Talk to me.","artist":"Bolden."} if that is what you believe they mean. The app verifies it against a real catalog and shows the user a small card so they can correct you, so a confident guess is more useful than omitting the field. Do NOT include a track they are only discussing in the abstract, and do NOT include one of your own recommendations.
+
+"requestedArtists" — array of artist names, e.g. ["Slauson Malone"]. Include an artist here ONLY when the user's current message names them specifically, asking for that artist by name. This is what lets you repeat an artist already recommended this session (see "Set rules for the six" and "Tracks already recommended this session" above) — without it, the app has no way to distinguish a deliberate repeat from a mistake, and will filter your candidate out even though you did exactly what they asked. Do NOT list an artist here just because you are recommending them yourself; this is ONLY for artists the USER named. Omit or leave empty otherwise — most turns will.
 
 "followUpQuestion" is your CLOSING BEAT, not a menu. Two things in order:
   1. ONE warm or curious sentence about THE USER or THE MOMENT THEY SHARED, not about a
@@ -341,7 +422,10 @@ function buildDynamicBlock(loreAddendum, sourceFacts, sourceTrack, previousRecom
       .join(', ');
     doNotRepeatText =
       `\n\n# Tracks already recommended this session\n` +
-      `Do NOT recommend any of these again, even if they'd otherwise fit: ${list}.`;
+      `Do NOT recommend any of these again, even if they'd otherwise fit: ${list}. ` +
+      `EXCEPTION: if the user's current message names one of these artists again by ` +
+      `name, asking for them specifically, the repeat is allowed — list that artist in ` +
+      `"requestedArtists" in your metadata so the app knows it is intentional.`;
   }
 
   return loreText + buildSourceTrackBlock(sourceFacts, sourceTrack) + doNotRepeatText;
@@ -541,7 +625,15 @@ async function streamClaudeReply({ messages, systemBlocks, res }) {
     );
   }
 
-  return fullText;
+  // usage/blockTypesSeen/stopReason ride along so the handler can log them if
+  // the turn ends up rendering blank (see the empty-reply guard below) — the
+  // 08-29 Test 1 session that surfaced this had reply_chars=0 with
+  // block_types=[thinking,text], meaning the model spent its whole budget on
+  // the thinking block and never emitted a text delta at all. That is a
+  // different failure than a marker sitting at position 0 with a full reply
+  // behind it, and telling them apart later requires these fields, not just
+  // the final text.
+  return { fullText, usage, blockTypesSeen, stopReason };
 }
 
 
@@ -580,27 +672,56 @@ function normalizeArtistKey(name) {
   return (name || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
 }
 
+// Brief A: what bends, and in what order, when Groove cannot fill three
+// slots. Higher-numbered rules yield to lower-numbered ones:
+//   1. Verification never bends (isUnshippable, checked in every stage).
+//   2. (Speech never bends — handled in the handler, not here.)
+//   3. Three-different-types bends FIRST. Stage 2 below drops takenTypes.
+//   4. The WIDE-tier quota (D-021) never bends silently. It stays active in
+//      every stage this function has. There is no stage 3.
+//   5. An explicit request is exempt from the no-repeat rule entirely,
+//      in every stage — see isExemptRepeat.
+//
+// BUG THIS REPLACES: the old relaxation pass dropped BOTH the type-spread
+// check AND the WIDE quota at once, checking only validation and
+// artist-repeat. The type drop is the intended, visible relaxation (rule 3).
+// The quota drop was never intended and was invisible: a struggling turn
+// could silently surface three mainstream (WIDE) picks, which is D-021 — the
+// entire novelty objective — quietly suspended on exactly the turns where a
+// user most needed the "good, but overlooked" answer instead of "safe."
+function isExemptRepeat(artistKey, takenArtists, requestedKeys) {
+  return takenArtists.has(artistKey) && !requestedKeys.has(artistKey);
+}
+
 /**
  * @param {Array} validated - candidates in Groove's rank order, each carrying
  *   `itunesValidation` and a `_rank` index.
  * @param {string[]} priorArtists - artists already recommended this conversation
  * @param {object|null} sourceTrack - what the user brought
+ * @param {string[]} requestedArtists - artists the user named BY NAME this
+ *   turn (Brief A, rule 5). Exempt from the no-repeat check even if they are
+ *   in priorArtists or are the source track's own artist.
  */
-function selectSurfaced(validated, priorArtists = [], sourceTrack = null) {
+function selectSurfaced(validated, priorArtists = [], sourceTrack = null, requestedArtists = []) {
   const takenTypes = new Set();
   const takenArtists = new Set(priorArtists.map(normalizeArtistKey));
   if (sourceTrack?.artist) takenArtists.add(normalizeArtistKey(sourceTrack.artist));
+  const requestedKeys = new Set(
+    (requestedArtists || []).map(normalizeArtistKey).filter(Boolean)
+  );
 
   const surfaced = [];
   const skipped = [];
   let wideCount = 0;
 
+  // Stage 1 — every rule active.
   for (const c of validated) {
     if (surfaced.length >= MAX_SURFACED) break;
 
+    const artistKey = normalizeArtistKey(c.artist);
     let reason = null;
     if (isUnshippable(c)) reason = 'validation_failed';
-    else if (takenArtists.has(normalizeArtistKey(c.artist))) reason = 'artist_repeat';
+    else if (isExemptRepeat(artistKey, takenArtists, requestedKeys)) reason = 'artist_repeat';
     else if (takenTypes.has(c.connectionType)) reason = 'type_taken';
     else if (c.tier === 'wide' && wideCount >= MAX_WIDE_SURFACED) reason = 'wide_quota';
 
@@ -611,26 +732,34 @@ function selectSurfaced(validated, priorArtists = [], sourceTrack = null) {
 
     surfaced.push(c);
     takenTypes.add(c.connectionType);
-    takenArtists.add(normalizeArtistKey(c.artist));
+    takenArtists.add(artistKey);
     if (c.tier === 'wide') wideCount += 1;
   }
 
-  // Relaxation pass. If constraints were strict enough to leave the user with
-  // one or two cards, that is the exact failure six candidates exist to prevent.
-  // Better a second card of the same connection type than a lonely single.
+  // Stage 2 — relax the connection-type rule ONLY (rule 3). Verification,
+  // the repeat exemption, and the WIDE quota (rule 4) all carry over
+  // unchanged from stage 1's accumulated state. If this still leaves fewer
+  // than three, that is the correct, final answer — there is no stage 3.
+  let stage = 1;
   if (surfaced.length < MAX_SURFACED) {
+    stage = 2;
     for (const c of validated) {
       if (surfaced.length >= MAX_SURFACED) break;
       if (surfaced.includes(c)) continue;
+
+      const artistKey = normalizeArtistKey(c.artist);
       if (isUnshippable(c)) continue;
-      if (takenArtists.has(normalizeArtistKey(c.artist))) continue;
+      if (isExemptRepeat(artistKey, takenArtists, requestedKeys)) continue;
+      if (c.tier === 'wide' && wideCount >= MAX_WIDE_SURFACED) continue;
+      // type_taken deliberately NOT checked here — this is the one relaxation.
 
       surfaced.push(c);
-      takenArtists.add(normalizeArtistKey(c.artist));
+      takenArtists.add(artistKey);
+      if (c.tier === 'wide') wideCount += 1;
     }
   }
 
-  return { surfaced, skipped };
+  return { surfaced, skipped, stage };
 }
 
 function logEventSafe(sessionId, eventType, payload, isTester = false) {
@@ -798,8 +927,14 @@ export default async function handler(req, res) {
       previousRecommendations
     );
 
-    const rawReplyText = await streamClaudeReply({ messages, systemBlocks, res });
+    const {
+      fullText: rawReplyText,
+      usage: streamUsage,
+      blockTypesSeen: streamBlockTypes,
+      stopReason: streamStopReason,
+    } = await streamClaudeReply({ messages, systemBlocks, res });
 
+    const extracted = extractStructuredData(rawReplyText);
     const {
       candidates,
       followUpQuestion,
@@ -807,8 +942,82 @@ export default async function handler(req, res) {
       askOffered,
       askAnswered,
       inputTrack,
-      cleanedReply,
-    } = extractStructuredData(rawReplyText);
+      requestedArtists,
+      recsFailureReason,
+    } = extracted;
+    // `let`, not `const`: the empty-reply guard below may need to replace this
+    // with a fallback line.
+    let { cleanedReply } = extracted;
+
+    // Change 1 (Brief A). Three distinct upstream causes all land here as an
+    // empty cleanedReply, and this is the ONLY place any of them gets a
+    // user-visible recovery:
+    //   - the marker sits at position 0 (nothing precedes it);
+    //   - the text delta never arrived at all (budget spent entirely on a
+    //     thinking block; see the 08-29 Test 1 evidence, reply_chars=0 with
+    //     block_types=[thinking,text]);
+    //   - salvage() had nothing salvageable before a malformed or superseded
+    //     block (see salvage()'s own comment — it deliberately does NOT pick
+    //     a fallback itself, so it cannot silently defeat this check the way
+    //     the old apology string did).
+    // In every case the model produced *something* server-side, but the user
+    // sees nothing and has no way to tell the difference from a hung
+    // request. Speech never bends (rule 2), so this is caught
+    // unconditionally, regardless of which cause produced it.
+    if (!cleanedReply || !cleanedReply.trim()) {
+      const fallback = pickEmptyReplyFallback();
+      console.warn(
+        `Groove reply rendered blank. output_tokens=${streamUsage.output} ` +
+          `block_types=[${[...streamBlockTypes].join(',')}] stop_reason=${streamStopReason}`
+      );
+      if (sessionId) {
+        logEventSafe(
+          sessionId,
+          'empty_reply_recovered',
+          {
+            output_tokens: streamUsage.output,
+            block_types: [...streamBlockTypes],
+            stop_reason: streamStopReason,
+          },
+          isTester
+        );
+      }
+      res.write(JSON.stringify({ type: 'delta', text: fallback }) + '\n');
+      cleanedReply = fallback;
+    } else if (recsFailureReason) {
+      // Change 1, follow-up (Brief A, D-033). Different shape of the same
+      // family: cleanedReply is NOT blank here (real text already streamed
+      // above, via processDeltaText, before the marker) but the recs
+      // metadata behind it broke server-side (see recsFailureReason —
+      // salvage() only sets this for a RECS-type block, never a META one).
+      // candidates is [] in this branch (salvage() always returns empty
+      // candidates), so the block below never runs and no cards would ever
+      // appear — the turn would otherwise read as an opening reflection
+      // with no follow-through. Logged distinctly from empty_reply_recovered:
+      // this is a different failure (breakage after a real reply, not
+      // silence) and the frequencies need to stay separable.
+      const closer = pickRecsDroppedFallback();
+      console.warn(
+        `Groove recs dropped after real text streamed. reason=${recsFailureReason} ` +
+          `output_tokens=${streamUsage.output} block_types=[${[...streamBlockTypes].join(',')}] ` +
+          `stop_reason=${streamStopReason}`
+      );
+      if (sessionId) {
+        logEventSafe(
+          sessionId,
+          'recs_dropped_after_reply',
+          {
+            reason: recsFailureReason,
+            output_tokens: streamUsage.output,
+            block_types: [...streamBlockTypes],
+            stop_reason: streamStopReason,
+          },
+          isTester
+        );
+      }
+      res.write(JSON.stringify({ type: 'delta', text: `\n\n${closer}` }) + '\n');
+      cleanedReply = `${cleanedReply}\n\n${closer}`;
+    }
 
     let enrichedRecs = [];
 
@@ -869,7 +1078,12 @@ export default async function handler(req, res) {
       );
 
       const priorArtists = previousRecommendations.map((r) => r.artist).filter(Boolean);
-      const { surfaced, skipped } = selectSurfaced(validated, priorArtists, sourceTrack);
+      const { surfaced, skipped, stage } = selectSurfaced(
+        validated,
+        priorArtists,
+        sourceTrack,
+        requestedArtists
+      );
 
       const failed = validated.filter(isUnshippable);
 
@@ -937,7 +1151,11 @@ export default async function handler(req, res) {
         } surfaced=${surfaced.length} ranks=[${surfaced
           .map((r) => r._rank)
           .join(',')}] types=[${surfaced.map((r) => r.connectionType).join(',')}]` +
-          ` pool=${candidatePool ? `${fromPool}/${candidates.length}` : 'none'}`
+          ` pool=${candidatePool ? `${fromPool}/${candidates.length}` : 'none'}` +
+          // Brief A, Change 3: stage=1 means every rule held; stage=2 means the
+          // type-spread rule (D-022) was relaxed to reach this count. Never
+          // stage 3 — the WIDE quota (D-021) has no relaxed stage to log.
+          ` stage=${stage}`
       );
     }
 
