@@ -613,45 +613,67 @@ export function getLoreAddendum(daysSeen = 0, context = {}) {
 
   let out = '\n\n';
 
-  // --- artists confirmed to exist -----------------------------------------
+  // --- artists AND tracks confirmed to exist --------------------------------
   //
-  // WHY: on 2026-08-01 five of six candidates failed iTunes validation, and
-  // the failures were fabrications rather than formatting mismatches: an Eno
-  // album credited to Laraaji, invented Satoshi Ashikawa titles, a Spoon track
-  // that does not exist. The SCENE quota (D-021) pushes generation into the
-  // thinnest part of the model's training data, where it pattern-completes
-  // plausible names instead of recalling real ones.
+  // WHY (artists): on 2026-08-01 five of six candidates failed iTunes
+  // validation, and the failures were fabrications rather than formatting
+  // mismatches: an Eno album credited to Laraaji, invented Satoshi Ashikawa
+  // titles, a Spoon track that does not exist. The SCENE quota (D-021) pushes
+  // generation into the thinnest part of the model's training data, where it
+  // pattern-completes plausible names instead of recalling real ones.
+  //
+  // WHY (tracks, added Brief B / D-032): the artist list alone did not fix
+  // this. A manual audit on 2026-08-30 found turns reaching pool=6/6 — every
+  // candidate drawn from this list — that STILL returned validated_ok=0,
+  // because the list only ever constrained WHO he named. He picked a real
+  // artist off the list and then still invented a track to go with them. So
+  // this list now offers actual track titles too, pulled from the same
+  // catalogue, for exactly the same reason the artist names were added.
   //
   // This is a safety net UNDER his judgment, not a replacement for it. The
   // wording is deliberately permissive: hard-constraining him to the list
   // would flatten recommendations into "artists whose audiences overlap,"
   // which is collaborative filtering, which is exactly what D-009 decided not
-  // to compete on. Last.fm supplies names. Groove supplies the connection.
+  // to compete on. Last.fm supplies names and tracks. Groove supplies the
+  // connection — same principle D-016 established for artists, extended one
+  // level deeper.
   if (candidatePool?.artists?.length) {
     const lines = candidatePool.artists
       .map((a) => {
-        if (a.listeners == null) return `- ${a.name}`;
-        const listeners = a.listeners.toLocaleString('en-US');
-        const hint =
-          a.tierHint === 'wide'
-            ? ' (widely known)'
-            : a.tierHint === 'scene'
-            ? ' (scene-level)'
-            : '';
-        return `- ${a.name} — ${listeners} listeners${hint}`;
+        const listenerBit =
+          a.listeners == null
+            ? ''
+            : ` — ${a.listeners.toLocaleString('en-US')} listeners${
+                a.tierHint === 'wide' ? ' (widely known)' : a.tierHint === 'scene' ? ' (scene-level)' : ''
+              }`;
+
+        // WIDE-tier artists deliberately get NO track line. "Top tracks"
+        // means most-played, which for a widely known artist means the hit —
+        // surfacing the hit is precisely what the novelty objective (D-021)
+        // exists to prevent, and only one WIDE slot exists per turn anyway.
+        // Same treatment for an artist this list simply has no track data
+        // for: absence of a track line always means "use your own knowledge
+        // here," never "this artist is unavailable."
+        if (a.tierHint === 'wide' || !a.topTracks?.length) {
+          return `- ${a.name}${listenerBit}`;
+        }
+
+        return `- ${a.name}${listenerBit}\n  Real tracks of theirs: ${a.topTracks.join(' / ')}`;
       })
       .join('\n');
 
     out += `# Artists in range tonight
 These artists all provably exist and are related to what is being discussed. They are ordered by how closely their audiences overlap with ${candidatePool.seed}. Listener counts are included where known so you can judge tier honestly.
 
+Where a "Real tracks of theirs" line is given, those titles are pulled straight from the catalogue — they exist, spelled exactly as shown. Prefer one of them when you use that artist. You may still choose a different track of theirs from memory if it makes a clearly better connection, but then you are relying on memory the same as always, with the same care that requires. Where no such line appears — a widely known artist, or one this list has no track data for — you are always working from memory, exactly as before this list existed. For a widely known artist that means reaching for the deep cut, never the hit, exactly as the novelty objective already asks of you.
+
 ${lines}
 
-Prefer these when one genuinely fits. You know the catalogue far better than this list does, so go outside it when you have a better connection — but if you do, be certain both the artist and the track are real.
+Prefer these when one genuinely fits. You know the catalogue far better than this list does, so go outside it — the artist AND the track — when you have a better connection. If you do go outside it, be certain both are real; this list existing does not lower that bar for anything it doesn't cover.
 
-Two things this list is NOT. It is not a ranking: audience overlap is not the same as any of your connection types, and a high-overlap artist may have no interesting relationship to the source at all. And it is not a set of recommendations: choosing, naming the connection, and explaining it are still entirely yours.
+Two things this list is NOT. It is not a ranking, of artists or of their tracks: audience overlap and play count are not any of your connection types, and an artist's most-played track may be the wrong choice entirely for the connection you are making. It is not a set of recommendations either: choosing which pair to use, naming the connection, and explaining it are still entirely yours.
 
-On tier: listener counts here are ARTIST-level. Tier is a property of the TRACK. A widely known artist's forgotten record is still SCENE. Use the numbers as a sanity check, not as the answer.
+On tier: listener counts here are ARTIST-level. Tier is a property of the TRACK. A widely known artist's forgotten record is still SCENE — which is exactly why this list gives you no tracks to lean on for them at all.
 
 `;
   }

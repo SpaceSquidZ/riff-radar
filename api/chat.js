@@ -329,7 +329,7 @@ Field rules:
 
 Give your best reading of what they meant, in the catalog's likely spelling. "that bolden track" becomes {"track":"Talk to me.","artist":"Bolden."} if that is what you believe they mean. The app verifies it against a real catalog and shows the user a small card so they can correct you, so a confident guess is more useful than omitting the field. Do NOT include a track they are only discussing in the abstract, and do NOT include one of your own recommendations.
 
-"requestedArtists" — array of artist names, e.g. ["Slauson Malone"]. Include an artist here ONLY when the user's current message names them specifically, asking for that artist by name. This is what lets you repeat an artist already recommended this session (see "Set rules for the six" and "Tracks already recommended this session" above) — without it, the app has no way to distinguish a deliberate repeat from a mistake, and will filter your candidate out even though you did exactly what they asked. Do NOT list an artist here just because you are recommending them yourself; this is ONLY for artists the USER named. Omit or leave empty otherwise — most turns will.
+"requestedArtists" — array of artist names, e.g. ["Slauson Malone"]. Include an artist here whenever the user's current message names them specifically — asking to hear them again, asking what you think of them, or simply steering the conversation toward them ("what about Grouper?", "I've been on a Grouper kick"). This is NOT limited to turns where you are giving recommendations: include it on a pure-conversation turn too, the moment they name someone specific. Two things depend on it: it is what lets you repeat an artist already recommended this session (see "Set rules for the six" and "Tracks already recommended this session" above) — without it, the app has no way to distinguish a deliberate repeat from a mistake — and it is also how the app knows who the conversation is currently about, which shapes what it looks up for you next turn. Do NOT list an artist here just because you are recommending them yourself, and do NOT list someone mentioned only in passing about a THIRD party ("my roommate loves Grouper" names no orbit shift). Omit or leave empty otherwise — most turns will.
 
 "followUpQuestion" is your CLOSING BEAT, not a menu. Two things in order:
   1. ONE warm or curious sentence about THE USER or THE MOMENT THEY SHARED, not about a
@@ -786,6 +786,12 @@ export default async function handler(req, res) {
     sourceTrack,
     previousRecommendations = [],
     languageHint: clientLanguageHint,
+    // Brief B, Change 1. The single "what is the user currently orbiting"
+    // signal for pool seeding — see resolveSeedArtist in lastfm.js. Distinct
+    // from sourceTrack: sourceTrack only updates on a full track confirmation
+    // and still drives the "ON THE TABLE" card and source-track grounding
+    // block, both unrelated to pool seeding and left untouched here.
+    orbitArtist = null,
 
     // v2a progress fields
     daysSeen = 0,
@@ -886,15 +892,17 @@ export default async function handler(req, res) {
 
     // --- Last.fm candidate pool ---------------------------------------------
     //
-    // Seeded from whatever the user is CURRENTLY orbiting, not what they
-    // arrived with. "More like the second one" means they have moved, and a
-    // pool still anchored to the original artist stops covering the actual
-    // conversation.
+    // Seeded from orbitArtist: whatever artist or track the user named most
+    // recently, as of the end of the PREVIOUS turn (see the "next turn's
+    // orbit" comment near the done payload below for how it updates). Brief
+    // B, Change 1 replaced the old sourceTrack/previousRecommendations
+    // priority here — sourceTrack still exists and is still used elsewhere
+    // in this function, just no longer for this.
     //
     // Fails open by design: null pool means Groove generates from memory
     // exactly as before. Never let an optimisation break a reply.
     let candidatePool = null;
-    const seedArtist = resolveSeedArtist(sourceTrack, previousRecommendations);
+    const seedArtist = resolveSeedArtist(orbitArtist, previousRecommendations);
     if (seedArtist) {
       try {
         candidatePool = await getCandidatePool(seedArtist);
@@ -1024,36 +1032,6 @@ export default async function handler(req, res) {
     if (candidates.length > 0) {
       const languageHint = clientLanguageHint || detectLanguageHint(messages);
 
-      if (sessionId) {
-        logEventSafe(
-          sessionId,
-          'rec_candidates_generated',
-          {
-            candidate_count: candidates.length,
-            types: candidates.map((c) => c.connectionType),
-            tiers: candidates.map((c) => c.tier),
-            distant_count: candidates.filter((c) => c.distant).length,
-            // The whole point of the Last.fm work is whether a pool improves
-            // validation survival. Recording pool presence and how many
-            // candidates actually came from it is what makes that measurable
-            // rather than a matter of impression.
-            pool_used: !!candidatePool,
-            pool_seed: candidatePool?.seed || null,
-            pool_size: candidatePool?.artists?.length || 0,
-            from_pool_count: candidatePool
-              ? candidates.filter((c) =>
-                  candidatePool.artists.some(
-                    (a) =>
-                      (a.name || '').toLowerCase().trim() ===
-                      (c.artist || '').toLowerCase().trim()
-                  )
-                ).length
-              : 0,
-          },
-          isTester
-        );
-      }
-
       // Validate ALL candidates in parallel, then select.
       //
       // This costs the progressive card reveal that v2a had, where each card
@@ -1086,6 +1064,16 @@ export default async function handler(req, res) {
       );
 
       const failed = validated.filter(isUnshippable);
+      // Brief B, Change 3: separated so both events below can report them
+      // independently — this is the pair that tells us whether Change 2
+      // (real track grounding) actually worked. not_found means the model
+      // named a track that plain does not exist; wrong_title means the
+      // ARTIST was real but the TRACK was not the one recommended (the
+      // 0829-patch failure mode). Change 2 should drive not_found down
+      // sharply; if wrong_title rises instead, titles are arriving from the
+      // pool but arriving dirty, which is a titlesMatch problem, not this one.
+      const notFoundCount = failed.filter((r) => r.itunesValidation === 'not_found').length;
+      const wrongTitleCount = failed.filter((r) => r.itunesValidation === 'wrong_title').length;
 
       if (sessionId && failed.length > 0) {
         logEventSafe(
@@ -1098,8 +1086,7 @@ export default async function handler(req, res) {
               reason: r.itunesValidation,
             })),
             failed_count: failed.length,
-            wrong_title_count: failed.filter((r) => r.itunesValidation === 'wrong_title')
-              .length,
+            wrong_title_count: wrongTitleCount,
             total_candidates: validated.length,
           },
           isTester
@@ -1144,6 +1131,52 @@ export default async function handler(req, res) {
             )
           ).length
         : 0;
+
+      // Brief B, Change 3. BUG THIS FIXES: this used to fire (as
+      // rec_candidates_generated) immediately after `if (candidates.length >
+      // 0)`, before validation or selection had run — so its payload could
+      // only ever carry pre-validation facts (count, types, tiers, pool
+      // size). validated_ok, surfaced, skip reasons, and relaxation stage
+      // did not exist yet at that point in the code, so they were never
+      // recorded anywhere queryable: only console.log saw them, and Vercel's
+      // free tier discards runtime logs within the hour. Of Test 1's seven
+      // turns, the two that surfaced nothing left almost no trace in
+      // Supabase, and "1 turn in 7 delivered three cards" was not
+      // recomputable from the database — exactly the funnel gap Roadmap v2's
+      // v1 definition-of-done requires closed.
+      //
+      // Moved here (same event NAME, same firing condition — still gated by
+      // the enclosing `if (candidates.length > 0)`, so this remains the
+      // unconditional one-event-per-recs-turn Brief B asked for; a turn with
+      // NO recs attempted at all correctly logs nothing here) so the payload
+      // can report the full outcome in one row instead of a fact half of it.
+      if (sessionId) {
+        const skipReasonCounts = skipped.reduce((acc, s) => {
+          acc[s.reason] = (acc[s.reason] || 0) + 1;
+          return acc;
+        }, {});
+
+        logEventSafe(
+          sessionId,
+          'rec_candidates_generated',
+          {
+            generated: candidates.length,
+            validated_ok: validated.length - failed.length,
+            surfaced: surfaced.length,
+            not_found_count: notFoundCount,
+            wrong_title_count: wrongTitleCount,
+            types: candidates.map((c) => c.connectionType),
+            tiers: candidates.map((c) => c.tier),
+            distant_count: candidates.filter((c) => c.distant).length,
+            seed_artist: seedArtist,
+            pool_size: candidatePool?.artists?.length || 0,
+            pool_hits: fromPool,
+            relaxation_stage: stage,
+            skip_reason_counts: skipReasonCounts,
+          },
+          isTester
+        );
+      }
 
       console.log(
         `[recs] generated=${candidates.length} validated_ok=${
@@ -1259,6 +1292,21 @@ export default async function handler(req, res) {
       }
     }
 
+    // Brief B, Change 1: next turn's orbit. Chose approach (a) from the
+    // brief — reuse what Groove already reports rather than adding a model
+    // call or a server-side message-parsing step. requestedArtists wins when
+    // present: it is the most direct "this is who I want" signal Brief A
+    // already added (populated on META turns too, so a bare artist mention
+    // with no recs asked for still updates it). inputTrack.artist is the
+    // fallback: a full track confirmation implies its artist just as much,
+    // and covers the case where the user names a track but the model does
+    // not also echo the artist into requestedArtists. If NEITHER fired this
+    // turn, orbitArtist carries forward unchanged rather than resetting to
+    // null — silence this turn does not mean the user stopped orbiting
+    // whatever they last named.
+    const nextOrbitArtist =
+      requestedArtists[requestedArtists.length - 1] || verifiedInputTrack?.artist || orbitArtist;
+
     // The client persists progress from these fields. An ask id is only sent
     // when Groove CONFIRMS he asked it, not merely because the server put it in
     // his context. Reporting it on offer alone burned six asks across two test
@@ -1272,6 +1320,7 @@ export default async function handler(req, res) {
         askOfferedText: askOffered && offeredAsk ? offeredAsk.text : null,
         askAnsweredId: askAnswered && pendingAskId ? pendingAskId : null,
         inputTrack: verifiedInputTrack,
+        orbitArtist: nextOrbitArtist,
       }) + '\n'
     );
     res.end();

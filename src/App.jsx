@@ -49,6 +49,12 @@ export default function App() {
   const [showConsent, setShowConsent] = useState(!hasSeenConsent());
 
   const [sourceTrack, setSourceTrack] = useState(null);
+  // Brief B, Change 1. Separate from sourceTrack on purpose: sourceTrack only
+  // updates on a full track confirmation and still drives the "ON THE TABLE"
+  // card; orbitArtist updates on EITHER an artist-only mention or a track
+  // confirmation, whichever was most recent, and exists only to seed the
+  // Last.fm pool server-side. See resolveSeedArtist in api/lib/lastfm.js.
+  const [orbitArtist, setOrbitArtist] = useState(null);
 
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -343,6 +349,7 @@ export default function App() {
           sessionId,
           previousRecommendations,
           sourceTrack: sourceTrackOverride || sourceTrack,
+          orbitArtist,
           isTester: isTester(),
 
           // v2a progress context. daysSeen replaces sessionCount: gating is
@@ -444,6 +451,16 @@ export default function App() {
                   inputTrack: event.inputTrack,
                 }));
               }
+            }
+
+            // Brief B, Change 1. The server already resolved this turn's
+            // freshest named artist (requestedArtists, falling back to
+            // inputTrack) against what we sent it, so just take its answer —
+            // no comparison needed here the way sourceTrack's isSameAsCurrent
+            // check above needs one, since the server itself already carries
+            // the old value forward when nothing new was named this turn.
+            if (event.orbitArtist) {
+              setOrbitArtist(event.orbitArtist);
             }
 
             if (event.arcBeatId) {

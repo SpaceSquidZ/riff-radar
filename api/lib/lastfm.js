@@ -25,15 +25,42 @@
 // destroy the reason the product exists. So the fix comes from elsewhere:
 // give the model a pool of artists that provably exist.
 //
-// WHAT THIS DOES NOT FIX
-// A real artist with an invented track title still gets through. iTunes
-// validation stays in the pipeline. Expect meaningful reduction, not zero.
+// WHAT THIS DID NOT FIX (Brief B, Change 2, D-032)
+// A manual audit on 2026-08-30 disproved half of the prediction above.
+// Later sessions reached pool=6/6 -- every candidate drawn from this
+// pool -- and STILL returned validated_ok=0. 119 distinct not_found tracks
+// across test sessions, ~20 checked by hand against full-catalogue iTunes
+// artistTerm searches (Danny Brown: 195 tracks; Earl Sweatshirt: 89). None of
+// the recommended tracks existed. This pool constrained WHO Groove named.
+// Nothing constrained WHAT TRACK he attached to them, so he invented one
+// anyway -- exactly the failure mode this file's own comment above already
+// predicted in as many words.
+//
+// So getCandidatePool now also fetches each artist's real top tracks
+// (fetchTopTracksFor, artist.getTopTracks) and hands Groove artist+track
+// PAIRS that provably exist, not just artist names. See groovePrompt.js,
+// "Artists in range tonight", for how this is framed to him -- same
+// principle as before, extended one level deeper: this constrains the
+// candidate SET further, Groove still supplies the judgment.
+//
+// WHAT THIS STILL DOES NOT FIX
+// "Top tracks" means most-played. A real artist's invented CONNECTION or
+// misjudged TIER still gets through -- this only guarantees the pair is
+// real, not that picking it or explaining it was good judgment. And for a
+// WIDE-tier artist specifically, most-played means the hit, which the
+// novelty objective (D-021) exists to avoid surfacing -- see the WIDE
+// handling in groovePrompt.js, which deliberately gives WIDE artists no
+// track list here at all and leaves Groove reaching for a deep cut from his
+// own knowledge instead, same as before this existed.
 //
 // WHAT THIS MUST NOT BECOME
-// Last.fm match scores are NOT used for ranking. Match score measures
-// co-listening, and ranking by it would quietly turn this into the
-// collaborative-filtering product D-009 explicitly decided not to build.
-// Last.fm supplies a candidate pool. Groove supplies the judgment.
+// Last.fm match scores AND play counts are NOT used for ranking or for
+// picking which track to recommend. Both measure popularity, and using
+// either would quietly turn this into the collaborative-filtering product
+// D-009 explicitly decided not to build. Last.fm supplies a candidate set
+// of real artist+track pairs. Groove supplies the judgment: which pair,
+// what connection, whether it is even the right call to reach outside the
+// set entirely.
 // ===========================================================================
 
 import { supabaseAdmin } from '../../src/supabaseClient.js';
@@ -57,6 +84,19 @@ const CACHE_TIMEOUT_MS = 2000;
 // with web service responses." Last.fm's headers are inconsistent, so this is
 // the floor when no usable max-age comes back.
 const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Brief B, Change 2. A handful is plenty: this is a "does this pair exist"
+// check for Groove, not a chart. Deliberately longer-lived than the
+// similar-artist pool above (which can legitimately shift as Last.fm's own
+// algorithm or tagging drifts) -- an artist's back catalogue does not
+// reissue itself weekly, so measured Last.fm cache-control headers are
+// ignored here in favor of a fixed, longer TTL. Cheapest shape that works
+// per the brief: a real, ~100-300ms parallel fetch across a full 20-artist
+// pool (measured, not estimated) landing almost entirely on a 30-day cache
+// after the first time any given artist appears in ANY pool, since the
+// cache key is per-artist, not per-seed.
+const TOP_TRACKS_PER_ARTIST = 5;
+const TOP_TRACKS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Artist-level listener counts, used to INFORM tier judgment rather than
 // decide it. D-021 is explicit that tier is a property of the TRACK: a Bill
@@ -183,6 +223,47 @@ async function call(method, params) {
 }
 
 /**
+ * A handful of `artistName`'s real tracks, cheapest-titles-first (Last.fm's
+ * own "top tracks" ordering, i.e. most-played — see the WIDE-tier caveat in
+ * this file's header before using this for a widely known artist).
+ *
+ * NEVER throws, same contract as getCandidatePool: any failure (no key, no
+ * network, unknown artist, timeout) returns an empty array, and the caller
+ * (getCandidatePool below) treats that identically to "no data" — the
+ * artist just carries no track list, exactly as if this function did not
+ * exist.
+ *
+ * @param {string} artistName
+ * @returns {Promise<string[]>}
+ */
+async function fetchTopTracksFor(artistName) {
+  const cacheKey = `toptracks:${normalizeKey(artistName)}`;
+
+  const cached = await cacheGet(cacheKey);
+  if (cached) return cached;
+
+  const res = await withTimeout(
+    call('artist.getTopTracks', {
+      artist: artistName,
+      autocorrect: '1',
+      limit: String(TOP_TRACKS_PER_ARTIST),
+    }),
+    FETCH_TIMEOUT_MS,
+    'getTopTracks'
+  );
+
+  let raw = res?.json?.toptracks?.track ?? [];
+  if (!Array.isArray(raw)) raw = raw ? [raw] : [];
+  const tracks = raw.map((t) => t?.name).filter(Boolean);
+
+  // Cache even an empty result (an artist Last.fm has no top-tracks data
+  // for is not going to gain any before the TTL is up), so a thin artist
+  // does not re-attempt this same failed lookup on every pool it appears in.
+  cacheSet(cacheKey, tracks, TOP_TRACKS_TTL_MS);
+  return tracks;
+}
+
+/**
  * A pool of real artists related to `artistName`.
  *
  * NEVER throws. Returns null when unavailable for any reason (no key, no
@@ -224,24 +305,35 @@ export async function getCandidatePool(artistName) {
   const TOP_TO_ENRICH = 8;
   const names = raw.map((a) => a?.name).filter(Boolean);
 
+  // Brief B, Change 2. Top tracks are fetched for ALL 20, not just the
+  // enriched 8 — measured cost is ~100-300ms for a full 20-artist parallel
+  // fetch (see the brief's Q3), so there is no latency reason to skip the
+  // unenriched 12. WIDE-tier exclusion (rule: don't hand out a "top tracks"
+  // list for a widely known artist, since most-played there means the hit —
+  // see D-021) happens in groovePrompt.js at render time instead of here,
+  // because tierHint is only known for the enriched 8 at fetch time anyway,
+  // and keeping "what to fetch" and "what to show" separate is simpler than
+  // threading that decision through two different code paths.
   const enriched = await Promise.all(
     names.slice(0, TOP_TO_ENRICH).map(async (name) => {
-      const infoRes = await withTimeout(
-        call('artist.getInfo', { artist: name, autocorrect: '1' }),
-        FETCH_TIMEOUT_MS,
-        'getInfo'
-      );
+      const [infoRes, topTracks] = await Promise.all([
+        withTimeout(call('artist.getInfo', { artist: name, autocorrect: '1' }), FETCH_TIMEOUT_MS, 'getInfo'),
+        fetchTopTracksFor(name),
+      ]);
       const listeners = Number(infoRes?.json?.artist?.stats?.listeners);
       const value = Number.isFinite(listeners) ? listeners : null;
-      return { name, listeners: value, tierHint: tierHint(value) };
+      return { name, listeners: value, tierHint: tierHint(value), topTracks };
     })
   );
 
-  const rest = names.slice(TOP_TO_ENRICH).map((name) => ({
-    name,
-    listeners: null,
-    tierHint: null,
-  }));
+  const rest = await Promise.all(
+    names.slice(TOP_TO_ENRICH).map(async (name) => ({
+      name,
+      listeners: null,
+      tierHint: null,
+      topTracks: await fetchTopTracksFor(name),
+    }))
+  );
 
   const pool = { seed: artistName, artists: [...enriched, ...rest] };
 
@@ -254,22 +346,33 @@ export async function getCandidatePool(artistName) {
 /**
  * Which artist should seed the pool this turn.
  *
- * The pool has to follow the thread. sourceTrack carries the artist the
- * server most recently confirmed the user is actually discussing right now
- * (client-side, it is updated from the verified inputTrack at the end of
- * EVERY turn where one is named, not only turns with recommendations). It is
- * the freshest signal available.
+ * Brief B, Change 1. BUG THIS REPLACES: the previous version had TWO inputs
+ * competing for priority — sourceTrack.artist (only updates when a full
+ * TRACK is confirmed) and previousRecommendations[last] (Groove's own last
+ * pick). Neither represents what the user is CURRENTLY oriented on. Once any
+ * track was confirmed, sourceTrack.artist won unconditionally and froze
+ * there for the rest of the session — a bare artist-only mention ("what
+ * about Grouper?") never touches sourceTrack at all, so the pool stayed
+ * stuck on the artist from three turns ago while the user had moved on.
+ * Confirmed live (Test 2): pool seed stayed "Tim Hecker" two turns after the
+ * user pivoted to Grouper by name.
  *
- * previousRecommendations only advances on turns that produced recs, so on a
- * turn where the user pivots to a new artist without asking for picks,
- * sourceTrack updates but previousRecommendations does not. Preferring
- * previousRecommendations there seeds the pool from an artist the
- * conversation has already left — one turn behind. sourceTrack wins;
- * previousRecommendations is the fallback for turns where no track was
- * confirmed at all (e.g. a bare "more like that" with nothing new named).
+ * orbitArtist is a single, unified signal instead: whichever of an artist
+ * name or a full track the user named MOST RECENTLY, whether or not a
+ * recommendation was ever asked for. It is computed in api/chat.js from the
+ * SAME requestedArtists/inputTrack fields Brief A already added to the
+ * metadata contract (see the handler, "next turn's orbit" comment) — no new
+ * model output was added for this. The pool is fetched before the current
+ * message is parsed, so this still carries the documented one-turn lag: it
+ * reflects what was named as of the END of the previous turn, not this
+ * turn's own text. That lag is expected and acceptable; the bug was
+ * permanent stickiness past it, not the lag itself.
+ *
+ * previousRecommendations is the fallback ONLY for a turn where nothing has
+ * ever been named at all (e.g. session opens on "surprise me").
  */
-export function resolveSeedArtist(sourceTrack, previousRecommendations = []) {
-  if (sourceTrack?.artist) return sourceTrack.artist;
+export function resolveSeedArtist(orbitArtist, previousRecommendations = []) {
+  if (orbitArtist) return orbitArtist;
   if (previousRecommendations.length > 0) {
     const last = previousRecommendations[previousRecommendations.length - 1];
     if (last?.artist) return last.artist;
