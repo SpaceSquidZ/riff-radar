@@ -323,7 +323,7 @@ Field rules:
 
 "region" is the artist's country of origin as a plain English name ("Brazil", "Nigeria", "Japan", "France", "USA", "UK"). This routes validation to the right regional catalog, so be accurate. Use "USA" if unsure.
 
-"explanation" MUST be exactly one sentence, 20 words or fewer, plain text, no markdown. Name the connection concretely: who the shared producer is, which move recurs, what the mechanism does.
+"explanation" MUST be exactly one sentence, 20 words or fewer, plain text, no markdown. Name the connection concretely: who the shared producer is, which move recurs, what the mechanism does. Never name a technique without saying what it does to the sound. "Collage approach" is not acceptable; "buries the vocal under the loop instead of on top of it" is.
 
 "inputTrack" — include this on ANY turn where the user names or clearly refers to a specific song of their own, whether or not you are giving recommendations. Format: {"track":"Song Title","artist":"Artist Name"}. Omit the field entirely if they have not named one.
 
@@ -473,20 +473,29 @@ function detectLanguageHint(messages) {
 // claude-sonnet-5, {type: "adaptive"} is the only "on" mode (there is no
 // numeric thinking-budget dial — `budget_tokens` is REMOVED and returns a
 // 400), and {type: "disabled"} is accepted. So only two genuinely distinct
-// arms exist for the A/B: Arm A (current behavior, made explicit) and Arm B
-// (off). A third "bounded, smallest budget" arm was requested but is not
-// expressible on this model: there is no token-budget parameter to shrink,
-// and the only other lever (`effort`) is already at its floor ("low") in Arm
-// A. Explicitly enabling adaptive thinking at effort "low" IS Arm A — it is
-// not a distinct third point. Running two arms per the brief's own
-// contingency for exactly this case.
-const THINKING_ARM = process.env.GROOVE_THINKING_ARM === 'B' ? 'B' : 'A';
+// arms exist for the A/B: Arm A (adaptive) and Arm B (off). A third
+// "bounded, smallest budget" arm was requested but is not expressible on
+// this model: there is no token-budget parameter to shrink, and the only
+// other lever (`effort`) is already at its floor ("low") in Arm A.
+// Explicitly enabling adaptive thinking at effort "low" IS Arm A — it is not
+// a distinct third point. Ran two arms per the brief's own contingency for
+// exactly this case.
+//
+// RESULT (Decision Log entry pending ID confirmation): arm B blind-rated
+// 2.20 vs. arm A's 2.17-2.18 across two independent samples, plus a 34%
+// output-token reduction in production (1112 -> 729 mean). Arm B ships as
+// the default. The env var stays for future experiments, but its
+// unrecognized-value fallback now lands on the SHIPPED arm rather than the
+// experimental one — an env var that silently falls back to whichever arm
+// happens to be the default is only a trap when the default is the risky
+// choice. Opt into the adaptive-thinking arm explicitly with
+// GROOVE_THINKING_ARM=A; anything else (unset, a typo, 'off') now safely
+// gets B.
+const THINKING_ARM = process.env.GROOVE_THINKING_ARM === 'A' ? 'A' : 'B';
 
 function thinkingConfigForArm(arm) {
-  // Arm A: current behavior, stated explicitly instead of relying on the
-  // model's undocumented-to-us omission default.
-  if (arm === 'B') return { type: 'disabled' };
-  return { type: 'adaptive' };
+  if (arm === 'A') return { type: 'adaptive' };
+  return { type: 'disabled' };
 }
 
 // Brief D, Part 2. Raised from 4096 regardless of the A/B outcome — this
