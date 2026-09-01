@@ -44,7 +44,7 @@
 import {
   buildCacheKey,
   cacheGet,
-  cacheSet,
+  queueCacheWrite,
   rowToValidation,
   rowToFacts,
 } from './itunesCache.js';
@@ -256,7 +256,7 @@ async function searchStore(term, country) {
   }
 }
 
-export async function validateOneTrack(rec, languageHint) {
+export async function validateOneTrack(rec, languageHint, cacheWriteBatch) {
   const stores = storesFor(rec, languageHint);
   const cacheKey = buildCacheKey('rec', rec.track, rec.artist, stores);
 
@@ -291,7 +291,7 @@ export async function validateOneTrack(rec, languageHint) {
   }
 
   if (artistMatches.length === 0) {
-    cacheSet(cacheKey, { found: false, confidence: 'not_found' });
+    queueCacheWrite(cacheWriteBatch, cacheKey, { found: false, confidence: 'not_found' });
     return { status: 'not_found', enriched: null };
   }
 
@@ -320,7 +320,7 @@ export async function validateOneTrack(rec, languageHint) {
   // versions, "(feat. X)") and strict about the actual words, so legitimate
   // catalogue variance still passes.
   if (fullMatches.length === 0) {
-    cacheSet(cacheKey, { found: false, confidence: 'wrong_title' });
+    queueCacheWrite(cacheWriteBatch, cacheKey, { found: false, confidence: 'wrong_title' });
     return { status: 'wrong_title', enriched: null };
   }
 
@@ -335,7 +335,7 @@ export async function validateOneTrack(rec, languageHint) {
     releaseYear: best.releaseDate ? best.releaseDate.slice(0, 4) : null,
   };
 
-  cacheSet(cacheKey, {
+  queueCacheWrite(cacheWriteBatch, cacheKey, {
     found: true,
     confidence: status,
     trackName: best.trackName || rec.track,
@@ -350,10 +350,10 @@ export async function validateOneTrack(rec, languageHint) {
 // user's own words (see chat.js). When absent, validation still works via
 // script detection; the hint only widens the store net for the
 // English-title / non-English-audio case.
-export async function validateAndEnrichRecs(recs, languageHint) {
+export async function validateAndEnrichRecs(recs, languageHint, cacheWriteBatch) {
   const results = await Promise.all(
     recs.map(async (rec) => {
-      const { status, enriched } = await validateOneTrack(rec, languageHint);
+      const { status, enriched } = await validateOneTrack(rec, languageHint, cacheWriteBatch);
       return {
         ...rec,
         itunesValidation: status,
@@ -449,7 +449,7 @@ export function titlesMatch(itunesTitle, userTitle) {
   return similarity(a, b) >= TITLE_SIMILARITY_FLOOR;
 }
 
-export async function lookupTrackFacts(track, artist, languageHint) {
+export async function lookupTrackFacts(track, artist, languageHint, cacheWriteBatch) {
   if (!track || !artist) return null;
 
   const stores = storesFor({ track, artist }, languageHint);
@@ -526,7 +526,7 @@ export async function lookupTrackFacts(track, artist, languageHint) {
   // Only persist if iTunes actually answered. A total network failure looks
   // identical to 'not_found' here, and caching that for a week would be wrong.
   if (anyRequestSucceeded) {
-    cacheSet(cacheKey, facts);
+    queueCacheWrite(cacheWriteBatch, cacheKey, facts);
   }
 
   if (sourceFactsCache.size >= SOURCE_CACHE_MAX) sourceFactsCache.clear();

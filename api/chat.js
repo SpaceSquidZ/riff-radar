@@ -43,6 +43,7 @@ import {
 } from '../src/groovePrompt.js';
 import { logEvent } from '../src/supabaseClient.js';
 import { validateOneTrack, lookupTrackFacts, titlesMatch } from './lib/validateTracks.js';
+import { flushCacheWrites } from './lib/itunesCache.js';
 import { getCandidatePool, resolveSeedArtist } from './lib/lastfm.js';
 
 export const config = {
@@ -863,6 +864,15 @@ export default async function handler(req, res) {
     openerPair = null,
   } = req.body;
 
+  // Brief D, Part 5. One array, request-scoped (never module-level -- Vercel
+  // can serve concurrent requests from one warm instance, and a shared
+  // global queue would risk mixing turns). Every cacheSet call site in this
+  // turn pushes into it instead of writing immediately; flushed once, near
+  // the end of the handler, well after the response has been sent. See
+  // api/lib/itunesCache.js for why (the batching+waitUntil rationale lives
+  // there, not duplicated here).
+  const cacheWriteBatch = [];
+
   if (!rawMessages || !Array.isArray(rawMessages)) {
     return res.status(400).json({ error: 'messages array is required' });
   }
@@ -930,7 +940,8 @@ export default async function handler(req, res) {
         sourceFacts = await lookupTrackFacts(
           sourceTrack.track,
           sourceTrack.artist,
-          languageHintForSource
+          languageHintForSource,
+          cacheWriteBatch
         );
         console.log(
           `[source] "${sourceTrack.track}" by ${sourceTrack.artist} -> ` +
@@ -1093,7 +1104,7 @@ export default async function handler(req, res) {
       // cache should mostly absorb.
       const validated = await Promise.all(
         candidates.map(async (c, i) => {
-          const { status, enriched } = await validateOneTrack(c, languageHint);
+          const { status, enriched } = await validateOneTrack(c, languageHint, cacheWriteBatch);
           return {
             ...c,
             _rank: i + 1,
@@ -1353,7 +1364,7 @@ export default async function handler(req, res) {
       const hint = clientLanguageHint || detectLanguageHint(messages);
       let facts = null;
       try {
-        facts = await lookupTrackFacts(inputTrack.track, inputTrack.artist, hint);
+        facts = await lookupTrackFacts(inputTrack.track, inputTrack.artist, hint, cacheWriteBatch);
       } catch (err) {
         console.error('Input track lookup failed (non-fatal):', err?.message || err);
       }
@@ -1418,6 +1429,16 @@ export default async function handler(req, res) {
       }) + '\n'
     );
     res.end();
+    // Brief D, Part 5. AFTER res.end() on purpose: the client already has its
+    // response by this point (zero perceived latency), but the handler's own
+    // promise has not resolved yet, so Vercel has no reason to freeze the
+    // instance before this await settles -- that is what actually fixes the
+    // lost-write bug, not waitUntil alone. waitUntil (used inside
+    // flushCacheWrites when a live context is available) is the further
+    // optimization that lets Vercel stop billing/holding the invocation open
+    // for this tail write; awaiting it here is still correct and safe either
+    // way, since in that branch the promise is already resolved.
+    await flushCacheWrites(cacheWriteBatch);
   } catch (err) {
     console.error('Error in /api/chat:', err);
     try {
@@ -1431,5 +1452,14 @@ export default async function handler(req, res) {
       /* response may already be closed */
     }
     res.end();
+    // Whatever candidates got validated before the error still deserve their
+    // cache write -- don't let a failed turn also waste the iTunes lookups
+    // it already paid for. flushCacheWrites never throws, but this is the
+    // last-resort error path, so guard it anyway rather than trust that.
+    try {
+      await flushCacheWrites(cacheWriteBatch);
+    } catch (flushErr) {
+      console.error('[itunes_cache] flush after error failed:', flushErr?.message || flushErr);
+    }
   }
 }

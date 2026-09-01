@@ -22,6 +22,7 @@
 // never break a reply.
 
 import { supabaseAdmin } from '../../src/supabaseClient.js';
+import { waitUntil } from '@vercel/functions';
 
 const TTL_HIT_MS = 30 * 24 * 60 * 60 * 1000;
 const TTL_MISS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -137,12 +138,46 @@ export async function cacheGetMany(keys) {
 }
 
 /**
- * Writes one row. Fire-and-forget: never awaited on the critical path, never
- * throws. Upsert so concurrent invocations racing on the same key are fine.
+ * BUG THIS FIXES (Brief D, Part 5): cacheSet used to fire its own
+ * fire-and-forget upsert immediately, once per track. On Vercel, a
+ * serverless instance can be frozen shortly after the response ends —
+ * BEFORE an unawaited promise gets a turn on the event loop to actually
+ * send its request. Six candidates meant up to six separate writes racing
+ * the freeze independently; losing some was not a corner case, it was the
+ * expected outcome most turns. Confirmed live (Brief C Q4): the console
+ * warning this produced ("cache write may be lost — container suspended
+ * before ... 2000ms timer fired on next thaw") was showing up on ordinary
+ * turns, not edge cases.
+ *
+ * The fix is two changes, not one:
+ *   1. Batch a whole turn's writes into ONE upsert (queueCacheWrite +
+ *      flushCacheWrites) instead of six-plus separate round trips — six
+ *      round trips awaited would cost up to ~2s of real latency per turn,
+ *      which is not an acceptable trade for correctness.
+ *   2. Actually keep the instance alive for that one write, via
+ *      waitUntil() from @vercel/functions where a live Vercel request
+ *      context exists, or by awaiting the single batched write directly
+ *      where it doesn't (local dev, tests) — one round trip is worth
+ *      paying for where six were not.
+ *
+ * waitUntil() itself does NOT throw or signal failure when no live Vercel
+ * context is available — @vercel/functions' own implementation reads
+ * `getContext().waitUntil?.(promise)` with optional chaining, so it just
+ * silently does nothing. A try/catch around waitUntil() cannot detect that,
+ * so hasWaitUntilContext() checks the same global context symbol directly,
+ * BEFORE deciding whether to also await the write.
  */
-export function cacheSet(key, fields) {
-  if (!supabaseAdmin) return;
-  const row = {
+function hasWaitUntilContext() {
+  try {
+    const ctx = globalThis[Symbol.for('@vercel/request-context')]?.get?.();
+    return typeof ctx?.waitUntil === 'function';
+  } catch {
+    return false;
+  }
+}
+
+function fieldsToRow(key, fields) {
+  return {
     cache_key: key,
     found: !!fields.found,
     confidence: fields.confidence ?? null,
@@ -158,26 +193,49 @@ export function cacheSet(key, fields) {
     track_view_url: fields.trackViewUrl ?? null,
     created_at: new Date().toISOString(),
   };
+}
 
-  try {
-    // Bounded even though it is fire-and-forget. An unbounded floating promise
-    // on a hung TCP connection can keep the serverless container alive and
-    // push it toward maxDuration, which is the same failure logEventSafe
-    // exists to prevent in api/chat.js.
-    withTimeout(
-      supabaseAdmin.from('itunes_cache').upsert(row, { onConflict: 'cache_key' }),
-      CACHE_TIMEOUT_MS,
-      'write'
-    )
-      .then((result) => {
-        if (result?.error) console.error('[itunes_cache] write failed:', result.error.message);
-      })
-      .catch((err) => {
-        console.error('[itunes_cache] write threw:', err?.message || err);
-      });
-  } catch (err) {
-    console.error('[itunes_cache] write threw:', err?.message || err);
+/**
+ * Queues one row for the batch upsert. Pure and synchronous — no I/O, so
+ * this cannot itself be lost to a container freeze. `batch` is caller-owned
+ * (one per request/turn — see api/chat.js), never a module-level array:
+ * Vercel can serve concurrent requests from one warm instance, and a
+ * shared global queue would risk one user's turn writing another's rows,
+ * or a slow request picking up a fast one's already-flushed batch.
+ */
+export function queueCacheWrite(batch, key, fields) {
+  if (!supabaseAdmin || !batch) return;
+  batch.push(fieldsToRow(key, fields));
+}
+
+/**
+ * Flushes one turn's queued rows in a SINGLE upsert. Resolves immediately
+ * (without waiting on the write) when waitUntil() has a live context to
+ * attach to; otherwise returns the write promise itself for the caller to
+ * await, per the fallback plan above. Callers should `await` this either
+ * way — in the waitUntil branch it is already resolved, so awaiting it
+ * costs nothing.
+ */
+export function flushCacheWrites(batch) {
+  if (!supabaseAdmin || !batch || batch.length === 0) return Promise.resolve();
+
+  const writePromise = withTimeout(
+    supabaseAdmin.from('itunes_cache').upsert(batch, { onConflict: 'cache_key' }),
+    CACHE_TIMEOUT_MS,
+    'batch write'
+  )
+    .then((result) => {
+      if (result?.error) console.error('[itunes_cache] batch write failed:', result.error.message);
+    })
+    .catch((err) => {
+      console.error('[itunes_cache] batch write threw:', err?.message || err);
+    });
+
+  if (hasWaitUntilContext()) {
+    waitUntil(writePromise);
+    return Promise.resolve();
   }
+  return writePromise;
 }
 
 // --- shape converters -------------------------------------------------------
