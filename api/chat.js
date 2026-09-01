@@ -709,12 +709,24 @@ async function streamClaudeReply({ messages, systemBlocks, res }) {
 const MAX_SURFACED = 3;
 const MAX_WIDE_SURFACED = 1;
 
-// Validation outcomes that must never reach a card. 'wrong_title' joins
-// 'not_found' here: the artist is real but the recommended TRACK could not be
-// confirmed, so the enrichment we would attach (preview, artwork, year, store
-// link) belongs to a different song. Roadmap v2 R2 treats one misattributed
-// track as a trust cliff, not a slope, which is why this fails closed.
-const UNSHIPPABLE_VALIDATION = new Set(['not_found', 'wrong_title']);
+// Validation outcomes that must never reach a normal card. 'wrong_title'
+// joins 'not_found' here: the artist is real but the recommended TRACK could
+// not be confirmed, so the enrichment we would attach (preview, artwork,
+// year, store link) belongs to a different song. Roadmap v2 R2 treats one
+// misattributed track as a trust cliff, not a slope, which is why this fails
+// closed.
+//
+// BUG THIS FIXES (found by F2's own test suite, Brief I): 'unconfirmed' was
+// missing from this set entirely. validateOneTrack returns enriched: null
+// for 'unconfirmed' exactly like 'not_found' does, so a candidate that hit a
+// transient iTunes network failure was passing isUnshippable() and surfacing
+// as an ordinary RecommendationCard with no artwork, no preview, and no
+// Apple Music link -- silently broken-looking, not excluded. It also is not
+// a 'not_found' EITHER, so it was never eligible for the new hunt-card path
+// (correctly -- a network blip is not evidence a track is real, just
+// evidence we don't know, see the hunt-eligibility comment below). It needs
+// to be excluded from both paths, not fall through a gap between them.
+const UNSHIPPABLE_VALIDATION = new Set(['not_found', 'wrong_title', 'unconfirmed']);
 
 function isUnshippable(candidate) {
   return UNSHIPPABLE_VALIDATION.has(candidate.itunesValidation);
