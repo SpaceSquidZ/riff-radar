@@ -983,6 +983,15 @@ export default async function handler(req, res) {
       } catch (err) {
         console.error('Candidate pool fetch failed (non-fatal):', err?.message || err);
       }
+      // Brief I: a console.log alone does not survive to next week --
+      // Vercel discards runtime logs within the hour (see the
+      // rec_candidates_generated comment in this file for the same lesson
+      // learned once already). This is the durable form: UAT traffic on the
+      // 8th/9th gives a real distribution of how often resolution fails,
+      // instead of reasoning from a sample of ten hand-picked artists.
+      if (!candidatePool) {
+        logEventSafe(sessionId, 'lastfm_pool_unresolved', { seed_artist: seedArtist }, isTester);
+      }
     }
 
     // Rebuild the addendum now that the pool is known. getLoreAddendum is pure,

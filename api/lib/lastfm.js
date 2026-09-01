@@ -105,6 +105,121 @@ const TOP_TRACKS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const WIDE_THRESHOLD = 1_000_000;
 const SCENE_THRESHOLD = 100_000;
 
+// Brief H/I. Confirmed live (Mariya Takeuchi / 竹内まりや): Last.fm tracks a
+// co-listening graph PER EXACT TAG STRING, not per artist. Several
+// near-identical tags for one human artist carry disjoint graphs, and a tag
+// with 86 listeners returns a full-looking 100-artist graph -- nothing in
+// the response shape distinguishes a thin/wrong tag from the real one. A
+// string-similarity rule (containment, edit distance, anything) can only
+// ever pick among Last.fm's own tag variants, and the legitimate record
+// (35,820 listeners, real MBID) does not always contain the romanized name
+// as a substring -- so no string rule starting from the input name can
+// reach it. The relationship is an alias fact, not a string relationship.
+//
+// MusicBrainz IS an alias database and getSimilar accepts mbid in place of
+// artist, which is a hard identity link with no string matching in it.
+// Verified live: MusicBrainz's top search result for "Mariya Takeuchi" was
+// 竹内まりや (score 100, "Mariya Takeuchi" listed in its own alias array),
+// and getSimilar?mbid=<that id> returned the exact same 100-artist graph as
+// querying "竹内まりや" directly (100/100 overlap).
+//
+// MISS PATH ONLY. This never runs on the ~90% of turns where getSimilar on
+// the name as given already succeeds -- see the call site in
+// getCandidatePool. MusicBrainz requires a descriptive User-Agent with a
+// contact address and rate-limits to 1 req/sec; this file only ever makes
+// one MusicBrainz call per artist per cold cache (see the mbid cache below),
+// well under that limit given it only fires on a miss.
+const MUSICBRAINZ_ROOT = 'https://musicbrainz.org/ws/2/artist';
+const MUSICBRAINZ_USER_AGENT = 'RiffRadar/1.0 (contact: qijun.j.zhong@gmail.com)';
+const MUSICBRAINZ_TIMEOUT_MS = 2000;
+// Approximates "forever" using the same TTL-based cache as everything else
+// in this file, rather than a second cache mechanism for one row shape. An
+// alias fact does not go stale the way a similar-artist ranking can.
+const MBID_CACHE_TTL_MS = 20 * 365 * 24 * 60 * 60 * 1000;
+
+/**
+ * Resolves `artistName` to a MusicBrainz artist MBID via a search query.
+ * NEVER throws. Returns null on any failure: no results, network error,
+ * unreachable, or the hard 2s timeout (a genuine abort, not just giving up
+ * on waiting -- MusicBrainz's own rate limit makes an abandoned in-flight
+ * request worth actually cancelling, not just ignoring).
+ *
+ * @returns {Promise<{mbid: string, resolvedName: string}|null>}
+ */
+async function resolveMbidViaMusicBrainz(artistName) {
+  const url = new URL(MUSICBRAINZ_ROOT);
+  url.searchParams.set('query', artistName);
+  url.searchParams.set('fmt', 'json');
+  url.searchParams.set('limit', '3');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MUSICBRAINZ_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url.toString(), {
+      headers: { 'User-Agent': MUSICBRAINZ_USER_AGENT },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      console.warn(`[lastfm] MusicBrainz search returned ${res.status} for "${artistName}"`);
+      return null;
+    }
+    const json = await res.json();
+    const top = json?.artists?.[0];
+    if (!top?.id) return null;
+    return { mbid: top.id, resolvedName: top.name };
+  } catch (err) {
+    // AbortError on timeout lands here too -- both are "MusicBrainz did not
+    // answer in time," and the caller treats them identically.
+    console.warn(`[lastfm] MusicBrainz search failed for "${artistName}":`, err?.message || err);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The miss-path resolver: getSimilar on the name as given has already
+ * failed by the time this is called. Tries a cached mbid first, then a live
+ * MusicBrainz search, then getSimilar again by mbid. Returns the raw
+ * similarartists.artist array (never throws, empty array on any failure --
+ * same contract as the rest of this file) plus the mbid actually used, so
+ * the caller can log and cache it.
+ */
+async function resolveSimilarViaMbid(artistName) {
+  const mbidCacheKey = `mbid:${normalizeKey(artistName)}`;
+  let mbid = await cacheGet(mbidCacheKey);
+  let resolvedName = null;
+
+  if (!mbid) {
+    const resolved = await resolveMbidViaMusicBrainz(artistName);
+    if (!resolved) return { raw: [], mbid: null };
+    mbid = resolved.mbid;
+    resolvedName = resolved.resolvedName;
+  }
+
+  const bySimRes = await withTimeout(
+    call('artist.getSimilar', { mbid, limit: String(POOL_SIZE) }),
+    FETCH_TIMEOUT_MS,
+    'getSimilar (by mbid)'
+  );
+  let raw = bySimRes?.json?.similarartists?.artist ?? [];
+  if (!Array.isArray(raw)) raw = raw ? [raw] : [];
+
+  if (raw.length > 0) {
+    // Cache the mapping only on a confirmed-working resolution, not on
+    // every MusicBrainz hit -- an mbid that resolves to zero similar
+    // artists is not worth remembering as "the answer" for next time.
+    cacheSet(mbidCacheKey, mbid, MBID_CACHE_TTL_MS);
+    console.log(
+      `[lastfm] resolved "${artistName}" -> ${resolvedName ? `"${resolvedName}" ` : ''}` +
+        `(mbid ${mbid}, ${raw.length} similar)`
+    );
+  }
+
+  return { raw, mbid };
+}
+
 function tierHint(listeners) {
   if (listeners == null) return null;
   if (listeners > WIDE_THRESHOLD) return 'wide';
@@ -293,8 +408,23 @@ export async function getCandidatePool(artistName) {
 
   let raw = similarRes.json?.similarartists?.artist ?? [];
   if (!Array.isArray(raw)) raw = raw ? [raw] : [];
+
   if (raw.length === 0) {
-    console.log(`[lastfm] no similar artists for "${artistName}"`);
+    console.log(`[lastfm] no similar artists for "${artistName}", trying mbid resolution`);
+    const viaMbid = await resolveSimilarViaMbid(artistName);
+    raw = viaMbid.raw;
+  }
+
+  if (raw.length === 0) {
+    // This console line alone would not survive to next week -- Vercel
+    // discards runtime logs within the hour. The durable form is a
+    // lastfm_pool_unresolved event, logged at the chat.js call site (which
+    // has sessionId/isTester in scope; this file deliberately does not
+    // handle event logging itself, same division as itunesCache.js and
+    // validateTracks.js -- lib files return data, chat.js decides what to
+    // log) whenever getCandidatePool returns null for a resolved seed
+    // artist.
+    console.log(`[lastfm] unresolved pool for "${artistName}" -- getSimilar returned 0`);
     return null;
   }
 
