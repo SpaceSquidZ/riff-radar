@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import ConsentBanner, { hasSeenConsent } from './ConsentBanner';
+import ConsentPanel, { hasSeenConsent, hasDeclinedConsent } from './ConsentPanel';
 import MessageContent from './MessageContent';
 import RecommendationCard from './RecommendationCard';
 import OpenerRecord from './OpenerRecord';
@@ -42,11 +42,13 @@ function getRandomLoadingMessage() {
 }
 
 export default function App() {
-  // D-031: no gate before the conversation. There is no landing phase and no
-  // form phase. Groove's opener is the landing page, and it renders instantly
-  // because it is static copy (D-030), not an API call.
-  const [phase, setPhase] = useState('chat');
-  const [showConsent, setShowConsent] = useState(!hasSeenConsent());
+  // D-031 (rebuilt 2026-08-31 -- the July 2026 "closed" version still gated
+  // the opener behind consent; see the Decision Log status note on D-031).
+  // No landing phase, no form phase, no gate before the conversation: Groove's
+  // opener starts on mount (see the effect below) regardless of consentOpen.
+  // The consent panel is a collapsible right-edge drawer (ConsentPanel.jsx),
+  // open by default until read, never blocking anything else.
+  const [consentOpen, setConsentOpen] = useState(!hasSeenConsent());
 
   const [sourceTrack, setSourceTrack] = useState(null);
   // Brief B, Change 1. Separate from sourceTrack on purpose: sourceTrack only
@@ -70,8 +72,8 @@ export default function App() {
   // The pair shown this session. Held in a ref so re-renders never reshuffle it
   // mid-conversation, which would rewrite a moment the user was part of.
   const openerPairRef = useRef(null);
-  // Guards the opener against running twice. It is gated on consent being
-  // dismissed, so the effect re-runs when showConsent flips.
+  // Guards the opener against running twice on mount. No longer gated on
+  // consent -- the opener starts unconditionally (D-031, AC-1).
   const openerStartedRef = useRef(false);
   // True while the channel is pulling the next bubble in. Rendered as
   // acquisition, not as a typing indicator: the design note is that a loading
@@ -101,6 +103,12 @@ export default function App() {
   // automatically. visitor_id on EVERY event is what lets any session
   // definition be computed retroactively from created_at later.
   function emit(eventType, payload = {}) {
+    // PRD v4.0 §9. Declining is a real opt-out, not a hidden card: checked
+    // fresh from localStorage on every call (not from React state, which
+    // could go stale across the session) and short-circuits BEFORE
+    // logEvent -- nothing reaches Supabase once declined, not even this
+    // event's own name.
+    if (hasDeclinedConsent()) return;
     const sessionId = getSessionId();
     logEvent(sessionId, eventType, {
       ...payload,
@@ -157,15 +165,17 @@ export default function App() {
     });
   }, []);
 
-  // The opener WAITS for the consent notice to be dismissed.
-  //
-  // BUG THIS FIXES: the bubbles were scheduled on mount, so Groove delivered
-  // his entire first-contact sequence to an empty room while the notice covered
-  // him. By the time the user clicked through, the staging had already happened
-  // and they saw four bubbles sitting there. The timing is the writing, so
-  // losing the timing loses the scene.
+  // D-031, AC-1: the opener starts on mount, unconditionally. It used to wait
+  // for the consent notice to be dismissed (`if (showConsent) return`) --
+  // that was itself a fix for a real bug (bubbles scheduled on mount while a
+  // full-width bottom bar covered them, so the user saw four bubbles sitting
+  // there at once instead of staged) but the fix was gating, which is exactly
+  // what AC-1 forbids. The right cure for the old bug is what actually
+  // shipped here: a narrow edge drawer that does not cover the chat column on
+  // desktop. It CAN still cover most of a narrow mobile viewport while open
+  // (88vw) -- if that reproduces the old symptom there, that is a rendering
+  // overlap to solve in ConsentPanel/CSS, not a reason to gate this again.
   useEffect(() => {
-    if (showConsent) return;
     if (openerStartedRef.current) return;
     if (!sessionInfoRef.current) return;
     openerStartedRef.current = true;
@@ -231,7 +241,7 @@ export default function App() {
       timers.forEach(clearTimeout);
       setAcquiring(false);
     };
-  }, [showConsent]);
+  }, []);
 
   useEffect(() => {
     writeCrate(crate);
@@ -574,7 +584,9 @@ export default function App() {
 
         <div className="app-layout">
           <div className="app-layout-content-col">
-            {phase === 'chat' && (
+            {/* D-031: no landing phase, this always renders -- the vestigial
+                `phase === 'chat'` gate (phase never left its initial value,
+                setPhase had no callers) is removed, not just satisfied. */}
               <div>
                 {messages.map((msg, i) => {
                   // Hide an assistant turn only when it carries NOTHING at all.
@@ -751,9 +763,22 @@ export default function App() {
                   </button>
                 </div>
               </div>
-            )}
           </div>
         </div>
+
+        {/* Required attribution under Apple's and Last.fm's terms, not
+            decorative fine print -- 0.55 opacity read as arguably too faint
+            to count as displayed; raised to 0.70. */}
+        <p
+          style={{
+            margin: '1.5rem 0 0 0',
+            fontSize: '0.75rem',
+            opacity: 0.7,
+            textAlign: 'center',
+          }}
+        >
+          Preview audio provided courtesy of iTunes. Recommendation data powered by AudioScrobbler from Last.fm.
+        </p>
       </div>
 
       <CratePanel
@@ -769,9 +794,11 @@ export default function App() {
         onUndoRemove={handleUndoRemove}
       />
 
-      {showConsent && phase !== 'landing' && (
-        <ConsentBanner onAccept={() => setShowConsent(false)} />
-      )}
+      <ConsentPanel
+        open={consentOpen}
+        onOpen={() => setConsentOpen(true)}
+        onClose={() => setConsentOpen(false)}
+      />
     </>
   );
 }

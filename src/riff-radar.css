@@ -1676,3 +1676,216 @@ body {
     flex: 1;
   }
 }
+
+/* ===========================================================================
+   CONSENT PANEL (D-031, rebuilt 2026-08-31)
+
+   Same tab/drawer/scrim pattern as the crate above, deliberately mirrored to
+   the RIGHT edge and made visually quieter: two drawers on one edge would
+   read as related functions, and they are not -- the crate is a feature
+   people reach for repeatedly, this is a disclosure read once and touched
+   at most twice. A right-edge control also conventionally reads as
+   meta/settings rather than content, so this needs no new convention to be
+   understood.
+
+   BOTTOM placement, not vertically centered like the crate tab (top: 50%)
+   -- placed with real clearance from the bottom-right corner because that
+   corner is where the Vercel Toolbar renders on preview deployments (it is
+   injected by Vercel's platform at the edge/proxy level, not part of this
+   app's own bundle -- nothing in this repo positions anything there, so it
+   could not be checked directly; confirm no collision once actually
+   deployed).
+   =========================================================================== */
+
+.consent-tab {
+  position: fixed;
+  right: 0;
+  bottom: 110px;
+  z-index: 39;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 5px 9px 4px;
+  background: #1e2027;
+  border: 1px solid #2b2e38;
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  color: #71747f;
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: -2px 0 6px rgba(0, 0, 0, 0.22);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.consent-tab:hover {
+  background: #24262d;
+  color: #9a9daa;
+}
+
+.consent-tab-open {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.consent-tab-label {
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+  font-weight: 500;
+}
+
+.consent-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.consent-drawer {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: min(320px, 88vw);
+  z-index: 49;
+  background: #1a1c23;
+  border-left: 1px solid #34363f;
+  transform: translateX(100%);
+  transition: transform 0.22s ease;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.5);
+  overflow-y: auto;
+}
+
+.consent-drawer-open {
+  transform: translateX(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .consent-drawer {
+    transition: none;
+  }
+}
+
+.consent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 12px 16px;
+  border-bottom: 1px solid #2b2e38;
+}
+
+.consent-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #d8d3c6;
+}
+
+.consent-close {
+  background: transparent;
+  border: none;
+  color: #8a8d99;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.consent-close:hover {
+  color: #e8e8ea;
+}
+
+.consent-body {
+  padding: 16px;
+  color: #b9bcc7;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.consent-body p {
+  margin: 0 0 12px 0;
+}
+
+.consent-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 14px 0;
+}
+
+.consent-accept {
+  padding: 0.5rem 1.25rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  background: #d8d3c6;
+  color: #1c1b18;
+  border: none;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.consent-decline {
+  padding: 0.5rem 1.1rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  background: transparent;
+  color: #9a9daa;
+  border: 1px solid #3a3d48;
+  border-radius: 4px;
+}
+
+.consent-decline:hover {
+  color: #d8d3c6;
+  border-color: #565a68;
+}
+
+.consent-link {
+  display: inline-block;
+  font-size: 0.8rem;
+  color: #8fb8e8;
+  opacity: 0.85;
+}
+
+/* Mobile: the crate tab moves to bottom: 84px on the LEFT (see
+   .crate-tab above) to clear the reading column and stay thumb-reachable.
+   This mirrors the same vertical band on the RIGHT so both edge controls
+   read as one consistent system -- opposite edges mean they cannot
+   collide with each other regardless. */
+@media (max-width: 700px) {
+  .consent-tab {
+    bottom: 84px;
+    padding: 7px 4px 8px 3px;
+  }
+
+  /* MUST, not a watch item: an 88vw side drawer open by default on a phone
+     covers the chat column, which is functionally the opener gate that was
+     just deleted from App.jsx -- arriving back as CSS instead of code. A
+     bottom sheet solves this without either of the two costs a narrower
+     side panel or an inline-opener rewrite would carry: it never covers the
+     conversation (the top of the viewport, where the opener bubbles first
+     appear, stays clear) and it does not touch Groove's scripted dialogue
+     at all, so his character-voice content in grooveOpeners.js stays exactly
+     as written regardless of viewport. */
+  .consent-drawer {
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: 0;
+    width: auto;
+    max-height: 60vh;
+    border-left: none;
+    border-top: 1px solid #34363f;
+    border-radius: 14px 14px 0 0;
+    transform: translateY(100%);
+    box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.5);
+  }
+
+  .consent-drawer-open {
+    transform: translateY(0);
+  }
+}
