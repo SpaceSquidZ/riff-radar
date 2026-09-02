@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import ConsentPanel, { hasSeenConsent, hasDeclinedConsent } from './ConsentPanel';
 import MessageContent from './MessageContent';
 import RecommendationCard from './RecommendationCard';
+import HuntCard from './HuntCard';
 import OpenerRecord from './OpenerRecord';
 import InputTrackCard from './InputTrackCard';
 import CratePanel from './CratePanel';
@@ -675,17 +676,27 @@ export default function App() {
                         {msg.role === 'assistant' && msg.recs && msg.recs.length > 0 && (
                           <>
                             <div className="rec-rows">
-                              {msg.recs.map((rec, j) => (
-                                <RecommendationCard
-                                  key={`${msg.id || i}-${j}`}
-                                  rec={rec}
-                                  isPlaying={activePreviewKey === previewKeyFor(rec)}
-                                  onTogglePlay={() => handleTogglePlay(rec, 'recommendation')}
-                                  onOutboundClick={handleOutboundClick}
-                                  isSaved={savedKeys.has(crateKey(rec))}
-                                  onToggleSave={(r) => handleToggleSave(r, 'recommendation')}
-                                />
-                              ))}
+                              {msg.recs.map((rec, j) =>
+                                rec.isHunt ? (
+                                  <HuntCard
+                                    key={`${msg.id || i}-${j}`}
+                                    rec={rec}
+                                    onOutboundClick={handleOutboundClick}
+                                    isSaved={savedKeys.has(crateKey(rec))}
+                                    onToggleSave={(r) => handleToggleSave(r, 'recommendation')}
+                                  />
+                                ) : (
+                                  <RecommendationCard
+                                    key={`${msg.id || i}-${j}`}
+                                    rec={rec}
+                                    isPlaying={activePreviewKey === previewKeyFor(rec)}
+                                    onTogglePlay={() => handleTogglePlay(rec, 'recommendation')}
+                                    onOutboundClick={handleOutboundClick}
+                                    isSaved={savedKeys.has(crateKey(rec))}
+                                    onToggleSave={(r) => handleToggleSave(r, 'recommendation')}
+                                  />
+                                )
+                              )}
                             </div>
 
                             {msg.followUpQuestion && (

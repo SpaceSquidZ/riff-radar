@@ -930,6 +930,36 @@ body {
   filter: none;
 }
 
+/* --- Hunt card (D-037): same paper-label object, not a warning state ---
+   No background/spine override on .rec-row-hunt on purpose. The brief is
+   explicit: "lead, not fault" -- a different alarm colour would read as an
+   error state, which is exactly the wrong register. Only the artwork slot
+   and the added line are distinct. */
+
+.rec-row-artwork-hunt {
+  width: 56px;
+  height: 56px;
+  border-radius: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  background: #ddd6c2;
+  color: #8d7f66;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rec-pill-hunt {
+  font-style: italic;
+}
+
+.rec-row-hunt-line {
+  color: #6f6a5c;
+  font-size: 12px;
+  font-style: italic;
+  margin-top: 2px;
+}
+
 /* --- Opener records: the same stock, quieter ---
    These are records Groove already had on, not recommendations. Same material
    so they belong to the same world, less contrast so the distinction holds. */

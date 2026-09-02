@@ -829,6 +829,34 @@ function selectSurfaced(validated, priorArtists = [], sourceTrack = null, reques
     }
   }
 
+  // D-037. A track we cannot play is a find, not a failure -- but only
+  // 'not_found' qualifies. 'wrong_title' means iTunes confirmed the ARTIST
+  // is real but no result's TITLE matched, which is the exact signature
+  // Bug 3 (2026-09-01) traced to Groove inventing titles for real artists
+  // when the pool is empty -- presenting one of those as "worth the dig"
+  // would misrepresent a likely-fabricated track as a genuine rare find.
+  // 'unconfirmed' (a transient iTunes network failure) is excluded for the
+  // same reason: it is not evidence the track is real, just evidence we
+  // don't know. Only 'not_found' -- artist and title both unmatched in
+  // every searched store -- fits the premise, which the whole feature is
+  // built on the measured 32% Apple Music hit rate for underground rap.
+  //
+  // At most one, ever, per the brief: two hunt cards reads as a broken
+  // product, one reads as a lead. Only added when stages 1-2 left room --
+  // never on top of three already-playable cards.
+  let huntAdded = false;
+  if (surfaced.length < MAX_SURFACED) {
+    for (const c of validated) {
+      if (huntAdded) break;
+      if (c.itunesValidation !== 'not_found') continue;
+      const artistKey = normalizeArtistKey(c.artist);
+      if (isExemptRepeat(artistKey, takenArtists, requestedKeys)) continue;
+      surfaced.push({ ...c, isHunt: true });
+      takenArtists.add(artistKey);
+      huntAdded = true;
+    }
+  }
+
   return { surfaced, skipped, stage };
 }
 
