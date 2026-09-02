@@ -688,6 +688,23 @@ On tier: listener counts here are ARTIST-level. Tier is a property of the TRACK.
 No verified track list is available for this turn. Recommend only records you are confident exist, and prefer fewer, surer picks over filling every slot.
 
 `;
+  } else if (userTurnCount === 1) {
+    // Brief K, item 3. Turn 1 cannot be grounded -- the candidate pool has
+    // nothing to seed from until orbitArtist exists, and orbitArtist is
+    // itself an output of a completed turn (Brief B's documented one-turn
+    // lag), so turn 1 is structurally the one turn guaranteed to run on
+    // memory alone. It is also the one turn every new listener sees first.
+    // Live evidence (2026-09-02): today's actual turn-1 session produced
+    // wrong_title=4 and a single surfaced card. Deferring recommendations
+    // by one exchange makes every recommendation in the product grounded,
+    // at no added latency or API call -- this is a prompt instruction, not
+    // an architecture change. Matches Lore Bible §9: asking about
+    // circumstance is what Groove actually wants and cannot get, so this
+    // is not a workaround bolted onto his character, it is in it.
+    out += `# This is the first exchange
+Turn 1 cannot be grounded in real catalogue data yet -- there is nothing to seed a candidate pool from until you know more. It is also the first thing a new listener sees. So on this turn only: confirm what they shared, say something real and specific about it, and ask them ONE question that moves things forward. Do NOT recommend anything yet, regardless of what they ask for -- use the pure-conversation shape (RIFF_RADAR_META), never RIFF_RADAR_RECS, on this turn. Recommendations begin next exchange, once there is something real to ground them in.
+
+`;
   }
 
   // --- session context, not lore ------------------------------------------
