@@ -23,7 +23,7 @@ import {
   clearPendingAsk,
   agePendingAsk,
 } from './loreProgress';
-import { FIRST_CONTACT, ACQUIRE_MS, pickReturnGreeting } from './grooveOpeners';
+import { FIRST_CONTACT, ACQUIRE_MS, FIRST_ACQUIRE_MS, pickReturnGreeting } from './grooveOpeners';
 import { pickOpenerPair } from './openerPairs';
 import { crateKey, readCrate, writeCrate, toCrateItem } from './crate';
 import { logEvent } from './supabaseClient';
@@ -80,6 +80,11 @@ export default function App() {
   // acquisition, not as a typing indicator: the design note is that a loading
   // state should be answerable to "what part of the apparatus is this."
   const [acquiring, setAcquiring] = useState(false);
+  // Brief K, 3b. Which status line the current acquisition gap carries, if
+  // any -- the last gap before the opener records is deliberately quiet
+  // (null), and every non-opener use of the acquiring indicator (e.g.
+  // return-visit greetings) also leaves this null, unchanged from before.
+  const [acquiringLabel, setAcquiringLabel] = useState(null);
 
   // The crate. Session-scoped on purpose: it survives a refresh but not a new
   // day, which is what it is. Cross-session persistence needs accounts.
@@ -200,6 +205,7 @@ export default function App() {
 
     function pushBubble(id, text, withRecords) {
       setAcquiring(false);
+      setAcquiringLabel(null);
       setMessages((prev) => [
         ...prev,
         {
@@ -214,20 +220,37 @@ export default function App() {
       ]);
     }
 
-    /** Shows acquisition at `at`, resolves the bubble ACQUIRE_MS later. */
-    function schedule(at, id, text, withRecords) {
-      timers.push(setTimeout(() => setAcquiring(true), at));
+    /**
+     * Shows acquisition at `at`, resolves the bubble `acquireMs` later
+     * (defaults to ACQUIRE_MS). `label`, if given, is the status text the
+     * acquisition indicator carries for this gap (Brief K, 3b) -- omit it
+     * for a quiet gap, e.g. the one right before the opener records.
+     */
+    function schedule(at, id, text, withRecords, acquireMs = ACQUIRE_MS, label = null) {
       timers.push(
-        setTimeout(() => pushBubble(id, text, withRecords), at + ACQUIRE_MS)
+        setTimeout(() => {
+          setAcquiring(true);
+          setAcquiringLabel(label);
+        }, at)
       );
-      return at + ACQUIRE_MS;
+      timers.push(
+        setTimeout(() => pushBubble(id, text, withRecords), at + acquireMs)
+      );
+      return at + acquireMs;
     }
 
     if (!isReturning) {
       let cursor = 0;
       FIRST_CONTACT.forEach((bubble, i) => {
         cursor += bubble.delayMs;
-        cursor = schedule(cursor, `opener-${i}`, bubble.text, !!bubble.showRecords);
+        cursor = schedule(
+          cursor,
+          `opener-${i}`,
+          bubble.text,
+          !!bubble.showRecords,
+          i === 0 ? FIRST_ACQUIRE_MS : ACQUIRE_MS,
+          bubble.statusLabel || null
+        );
       });
     } else {
       // The first-contact script only works once. Replaying it would have
@@ -719,8 +742,15 @@ export default function App() {
                       </svg>
                     </div>
                     <div className="chat-content">
-                      <div className="signal-acquiring" role="status" aria-label="Incoming transmission">
+                      <div
+                        className="signal-acquiring"
+                        role="status"
+                        aria-label={acquiringLabel || 'Incoming transmission'}
+                      >
                         <span /><span /><span /><span /><span /><span />
+                        {acquiringLabel && (
+                          <span className="signal-acquiring-label">{acquiringLabel}</span>
+                        )}
                       </div>
                     </div>
                   </div>

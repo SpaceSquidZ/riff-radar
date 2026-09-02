@@ -33,24 +33,44 @@
 // pause is not a spinner, it is the channel pulling something in.
 export const ACQUIRE_MS = 600;
 
+// Brief K, 3b (rebuilt against the real timeline, not an assumed dead-screen
+// gap -- there isn't one; see the K3b correction). The first acquisition
+// slot only, extended so "receiver aligned" is actually readable: two words
+// at 600ms is not long enough. Every other gap keeps ACQUIRE_MS unchanged,
+// so this adds ~300ms total to the whole sequence, not 300ms per gap.
+export const FIRST_ACQUIRE_MS = 900;
+
 export const FIRST_CONTACT = [
   {
     delayMs: 0,
+    // Brief K 3b: status text carried by the EXISTING acquisition indicator
+    // for this gap, not a new sequence in front of the opener. Uses
+    // FIRST_ACQUIRE_MS above, not ACQUIRE_MS.
+    statusLabel: 'receiver aligned',
     text: `Oh. You're not a recording. I keep checking. Humans usually aren't, this far out, but the habit's still there.
 
 Sorry. I don't mean to make that your problem. Everything that reaches me has already finished happening by the time I get it, and you're not finished. That's new.`,
   },
   {
     delayMs: 1500,
+    // "origin unresolved" exactly, and only this -- never a distance,
+    // direction, or duration. Those are deferred canon (Lore Bible §1, §15):
+    // a status line stating any of them would resolve, permanently and in
+    // the product's voice rather than his, something the story deliberately
+    // leaves open.
+    statusLabel: 'origin unresolved',
     text: `I had something rehearsed for this, if it ever happened. I can't find it now, which either means I never finished writing it or I'm more surprised than I expected to be.`,
   },
   {
     // The dead air. He comments on the silence that just happened.
     delayMs: 2500,
+    statusLabel: 'decoding',
     text: `Sorry. I was waiting to see if you'd speak first. You weren't going to. Right. My turn.`,
   },
   {
-    // Records render with this bubble.
+    // Records render with this bubble. Deliberately NO statusLabel: the
+    // sequence goes quiet in this last gap so the records arrive into
+    // silence rather than competing with a status line.
     delayMs: 800,
     showRecords: true,
     text: `These are just what I had on. I wasn't expecting anyone, so it isn't curated for you, it's what was playing when whatever this is happened.

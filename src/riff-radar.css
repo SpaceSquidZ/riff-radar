@@ -757,6 +757,31 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   }
 }
 
+/* Brief K, 3b: status text carried by the existing acquisition indicator
+   (see grooveOpeners.js's statusLabel field) rather than a new sequence in
+   front of the opener. Monospace label register, matching the K1 novelty
+   control's "Heard this before?" row. */
+.signal-acquiring-label {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: #9a9daa;
+  margin-left: 6px;
+  animation: signal-label-in 0.4s ease both;
+}
+
+@keyframes signal-label-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Reduced-motion viewers see the text without the fade-in transition. */
+@media (prefers-reduced-motion: reduce) {
+  .signal-acquiring-label {
+    animation: none;
+  }
+}
+
 /* --- Undo Vite's scaffolding defaults ---
    Vite's starter index.css ships:
 
