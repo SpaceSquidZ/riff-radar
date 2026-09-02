@@ -1095,12 +1095,28 @@ export default async function handler(req, res) {
     // sees nothing and has no way to tell the difference from a hung
     // request. Speech never bends (rule 2), so this is caught
     // unconditionally, regardless of which cause produced it.
-    if (!cleanedReply || !cleanedReply.trim()) {
-      const fallback = pickEmptyReplyFallback();
+    // Brief K, §2. `isBlank` no longer immediately writes a fallback to the
+    // client -- it used to, which is exactly what produced the contradiction
+    // this fixes: the apology streamed before candidate validation had even
+    // started, so it was blind to whether real cards were about to surface.
+    // A blank-prose turn that also validated real candidates showed
+    // "Something cut out... try me again?" directly above three valid
+    // cards -- telling the user the turn failed while proving otherwise
+    // underneath. The diagnostic logging below still fires immediately
+    // (this is real, worth tracking regardless of outcome); the DECISION
+    // about what the user sees is deferred to after `surfaced` is known,
+    // near the end of this function.
+    const isBlank = !cleanedReply || !cleanedReply.trim();
+    if (isBlank) {
       console.warn(
         `Groove reply rendered blank. output_tokens=${streamUsage.output} ` +
           `block_types=[${[...streamBlockTypes].join(',')}] stop_reason=${streamStopReason}`
       );
+      if (process.env.BRIEF_K_DEBUG) {
+        console.warn(
+          `[brief-k-debug] raw API response, first 200 chars: ${JSON.stringify(rawReplyText.slice(0, 200))}`
+        );
+      }
       if (sessionId) {
         logEventSafe(
           sessionId,
@@ -1113,8 +1129,6 @@ export default async function handler(req, res) {
           isTester
         );
       }
-      res.write(JSON.stringify({ type: 'delta', text: fallback }) + '\n');
-      cleanedReply = fallback;
     } else if (recsFailureReason) {
       // Change 1, follow-up (Brief A, D-033). Different shape of the same
       // family: cleanedReply is NOT blank here (real text already streamed
@@ -1151,6 +1165,11 @@ export default async function handler(req, res) {
     }
 
     let enrichedRecs = [];
+    // Declared outside the block below so the deferred isBlank resolution
+    // (after this block) can see it regardless of whether candidates.length
+    // was 0 to begin with -- an empty candidates list trivially means
+    // surfaced stays [].
+    let surfaced = [];
 
     if (candidates.length > 0) {
       const languageHint = clientLanguageHint || detectLanguageHint(messages);
@@ -1179,12 +1198,9 @@ export default async function handler(req, res) {
       );
 
       const priorArtists = previousRecommendations.map((r) => r.artist).filter(Boolean);
-      const { surfaced, skipped, stage } = selectSurfaced(
-        validated,
-        priorArtists,
-        sourceTrack,
-        requestedArtists
-      );
+      const selection = selectSurfaced(validated, priorArtists, sourceTrack, requestedArtists);
+      surfaced = selection.surfaced;
+      const { skipped, stage } = selection;
 
       const failed = validated.filter(isUnshippable);
       // Brief B, Change 3: separated so both events below can report them
@@ -1340,6 +1356,38 @@ export default async function handler(req, res) {
           ` not_found=${notFoundCount} wrong_title=${wrongTitleCount}` +
           ` pool_size=${candidatePool?.artists?.length || 0} seed=${seedArtist || 'none'}`
       );
+    }
+
+    // Brief K, §2. The deferred half of the isBlank branch above: now that
+    // `surfaced` is known, decide what the user actually sees. This is the
+    // fix for the contradiction regardless of why the prose came back
+    // blank in the first place -- rule 2c is what SHOULD prevent isBlank
+    // from ever being true, this is the backstop for when it doesn't.
+    if (isBlank) {
+      if (surfaced.length > 0) {
+        // Say nothing rather than something that contradicts the cards
+        // underneath it. The client already renders a contentless message
+        // correctly as long as recs exist (see the hasNothing check in
+        // App.jsx, which OR's in msg.recs.length > 0) -- this needs no
+        // client-side change to work.
+        console.warn(
+          `Groove reply blank but ${surfaced.length} card(s) surfaced anyway -- ` +
+            `suppressing the "try again" fallback so it does not contradict what is on screen.`
+        );
+        if (sessionId) {
+          logEventSafe(
+            sessionId,
+            'empty_reply_recovered_with_cards',
+            { surfaced_count: surfaced.length },
+            isTester
+          );
+        }
+        // cleanedReply stays '' -- intentionally, not overwritten.
+      } else {
+        const fallback = pickEmptyReplyFallback();
+        res.write(JSON.stringify({ type: 'delta', text: fallback }) + '\n');
+        cleanedReply = fallback;
+      }
     }
 
     // --- progress logging -------------------------------------------------
