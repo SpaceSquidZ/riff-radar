@@ -101,7 +101,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, () => {
   console.log(
     `[local-server] listening on http://localhost:${port} (GROOVE_THINKING_ARM=${
-      process.env.GROOVE_THINKING_ARM || '(unset, arm A default)'
+      process.env.GROOVE_THINKING_ARM || '(unset, arm B default)'
     })`
   );
 });

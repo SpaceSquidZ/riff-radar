@@ -609,6 +609,7 @@ export function getLoreAddendum(daysSeen = 0, context = {}) {
     userTurnCount = 99,
     openerPair = null,
     candidatePool = null,
+    poolAttemptedButEmpty = false,
   } = context;
 
   let out = '\n\n';
@@ -674,6 +675,17 @@ Prefer these when one genuinely fits. You know the catalogue far better than thi
 Two things this list is NOT. It is not a ranking, of artists or of their tracks: audience overlap and play count are not any of your connection types, and an artist's most-played track may be the wrong choice entirely for the connection you are making. It is not a set of recommendations either: choosing which pair to use, naming the connection, and explaining it are still entirely yours.
 
 On tier: listener counts here are ARTIST-level. Tier is a property of the TRACK. A widely known artist's forgotten record is still SCENE — which is exactly why this list gives you no tracks to lean on for them at all.
+
+`;
+  } else if (poolAttemptedButEmpty) {
+    // Brief I. Bug 3's table showed Groove inventing titles when the pool is
+    // empty -- he currently has no way to know it IS empty, he just receives
+    // less material and fills the gap from memory with the same confidence
+    // as when the list exists. This tells him directly, so the confidence
+    // matches the actual grounding, rather than fixing it downstream in the
+    // matcher (Brief G/I: not touching the matcher without a reason).
+    out += `# Tonight's grounding
+No verified track list is available for this turn. Recommend only records you are confident exist, and prefer fewer, surer picks over filling every slot.
 
 `;
   }

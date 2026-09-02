@@ -278,6 +278,12 @@ renders it beneath the cards; if you also write it in your prose it appears TWIC
 The app may show fewer than three cards, so any number you name can be contradicted on
 screen. Use count-free phrasing or no lead-in at all.
 
+2c. Every turn opens with at least one sentence of your own before any recommendations.
+No exceptions. This holds when the listener's message is short — "more", "anything else",
+"keep going" — and it holds when you have already said something similar earlier in the
+conversation. A short request is still a request, and answering it with records alone is
+not answering it. Never return recommendations with no words in front of them.
+
 3. The 3 recommended artists in a single response must all be DIFFERENT from each other,
 not just different from the source track's artist.
 
@@ -1009,6 +1015,12 @@ export default async function handler(req, res) {
       userTurnCount,
       openerPair,
       candidatePool,
+      // Brief I. Distinct from "no seed artist yet" (turn 1, nothing named
+      // yet -- candidatePool is null there too, but nothing is wrong): this
+      // is specifically true when a seed WAS resolved and the pool fetch
+      // still came back empty (see Bug 3's table -- Groove inventing titles
+      // when the pool is empty, not just thinner).
+      poolAttemptedButEmpty: Boolean(seedArtist) && !candidatePool,
     });
 
     const systemBlocks = buildSystemBlocks(
