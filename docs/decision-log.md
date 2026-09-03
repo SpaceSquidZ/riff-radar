@@ -245,7 +245,7 @@
 | ID | Question | Blocks |
 |---|---|---|
 | D-019 | Connection-strength formula and per-day cap tuning | Transmission Log pacing |
-| D-036 | Withhold WIDE-tier top tracks entirely, or send tracks 5–10 instead of 1–5 | Pool grounding for mainstream artists |
+| D-036 | Prompt rule replacing the percentage band — decided, implementation held until after the 6 Sep freeze. Needs the five-seed adherence measurement before it can close. | Pool grounding for mainstream artists |
 | — | Session-only crate in August, or defer to November? Decision deferred to end of Week 4: build only if intake rebuild finishes on schedule or early. | August scope |
 | — | Whether the arc's true ending ever ships | See D-028 completion risk |
 
