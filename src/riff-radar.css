@@ -1949,12 +1949,18 @@ body {
   border-color: #8d7f66;
 }
 
-/* On a phone the tab must not sit over the conversation. Bottom-left corner
-   keeps it reachable by thumb and out of the reading column. */
+/* Brief M, P0-5. Bottom-left put the crate tab in the same band as the
+   input area, where a phone user's thumb actually lives -- moved to the
+   top-left, below the wordmark, instead. top:90px is sized to clear the
+   1.5rem outer padding plus the h1 wordmark on a typical mobile viewport;
+   flagging that this needs a check on an actual device, not just the
+   arithmetic, the same way K3a did. transform:none cancels the desktop
+   rule's vertical-centering transform, which would otherwise offset this
+   top value by half the tab's own height. */
 @media (max-width: 700px) {
   .crate-tab {
-    top: auto;
-    bottom: 84px;
+    top: 90px;
+    transform: none;
     border-radius: 0 8px 8px 0;
     padding: 10px 6px 11px 5px;
   }
