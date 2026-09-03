@@ -732,7 +732,23 @@ const MAX_WIDE_SURFACED = 1;
 // (correctly -- a network blip is not evidence a track is real, just
 // evidence we don't know, see the hunt-eligibility comment below). It needs
 // to be excluded from both paths, not fall through a gap between them.
-const UNSHIPPABLE_VALIDATION = new Set(['not_found', 'wrong_title', 'unconfirmed']);
+//
+// Brief N, N-5: 'misattributed' joins the set the same way. iTunes confirmed
+// the TITLE exists, just under a different artist than Groove named -- the
+// enrichment validateOneTrack would attach belongs to that other artist's
+// recording, not the one being recommended, so it's exactly as unshippable
+// as wrong_title for the same reason. It also fails the hunt-card check
+// below on its own: that check requires itunesValidation === 'not_found'
+// exactly, and 'misattributed' never satisfies that, so no separate change
+// is needed there -- the hunt card's promise is that the record is out
+// there under the recommended name, and a misattributed candidate is
+// evidence it isn't.
+const UNSHIPPABLE_VALIDATION = new Set([
+  'not_found',
+  'wrong_title',
+  'unconfirmed',
+  'misattributed',
+]);
 
 function isUnshippable(candidate) {
   return UNSHIPPABLE_VALIDATION.has(candidate.itunesValidation);
@@ -1184,7 +1200,11 @@ export default async function handler(req, res) {
       // cache should mostly absorb.
       const validated = await Promise.all(
         candidates.map(async (c, i) => {
-          const { status, enriched } = await validateOneTrack(c, languageHint, cacheWriteBatch);
+          const { status, enriched, misattributedArtist } = await validateOneTrack(
+            c,
+            languageHint,
+            cacheWriteBatch
+          );
           return {
             ...c,
             _rank: i + 1,
@@ -1193,6 +1213,10 @@ export default async function handler(req, res) {
             artworkUrl: enriched?.artworkUrl ?? null,
             trackViewUrl: enriched?.trackViewUrl ?? null,
             releaseYear: enriched?.releaseYear ?? null,
+            // Diagnostic only -- not surfaced on any card. Brief N, N-5: lets
+            // the itunes_validation_failed log line below say who iTunes
+            // actually credits the title to, not just that it was someone else.
+            misattributedArtist: misattributedArtist ?? null,
           };
         })
       );
@@ -1213,6 +1237,13 @@ export default async function handler(req, res) {
       // pool but arriving dirty, which is a titlesMatch problem, not this one.
       const notFoundCount = failed.filter((r) => r.itunesValidation === 'not_found').length;
       const wrongTitleCount = failed.filter((r) => r.itunesValidation === 'wrong_title').length;
+      // Brief N, N-5's measurement ask: how big is this failure mode. Counted
+      // the same way notFoundCount/wrongTitleCount already are, so it slots
+      // into the existing before/after read on this log line rather than
+      // needing a separate one-off query.
+      const misattributedCount = failed.filter(
+        (r) => r.itunesValidation === 'misattributed'
+      ).length;
 
       if (sessionId && failed.length > 0) {
         logEventSafe(
@@ -1223,9 +1254,13 @@ export default async function handler(req, res) {
               track: r.track,
               artist: r.artist,
               reason: r.itunesValidation,
+              ...(r.itunesValidation === 'misattributed'
+                ? { misattributed_artist: r.misattributedArtist }
+                : {}),
             })),
             failed_count: failed.length,
             wrong_title_count: wrongTitleCount,
+            misattributed_count: misattributedCount,
             total_candidates: validated.length,
           },
           isTester
@@ -1323,6 +1358,7 @@ export default async function handler(req, res) {
             surfaced: surfaced.length,
             not_found_count: notFoundCount,
             wrong_title_count: wrongTitleCount,
+            misattributed_count: misattributedCount,
             types: candidates.map((c) => c.connectionType),
             tiers: candidates.map((c) => c.tier),
             distant_count: candidates.filter((c) => c.distant).length,
@@ -1353,7 +1389,7 @@ export default async function handler(req, res) {
           // only in the itunes_validation_failed event — so a console-log-based
           // harness (replay.mjs, run where Supabase creds aren't available)
           // couldn't recover them. Not otherwise used by this line's readers.
-          ` not_found=${notFoundCount} wrong_title=${wrongTitleCount}` +
+          ` not_found=${notFoundCount} wrong_title=${wrongTitleCount} misattributed=${misattributedCount}` +
           ` pool_size=${candidatePool?.artists?.length || 0} seed=${seedArtist || 'none'}`
       );
     }

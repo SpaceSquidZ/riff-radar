@@ -291,6 +291,34 @@ export async function validateOneTrack(rec, languageHint, cacheWriteBatch) {
   }
 
   if (artistMatches.length === 0) {
+    // Brief N, N-5. BUG THIS FIXES: a candidate could fail the artist check
+    // above while the TITLE was sitting right there in the same storeResults,
+    // credited to someone else -- "Down Town" is real, but iTunes lists it
+    // under Sugar Babe, not the Eiichi Ohtaki attribution Groove gave it. The
+    // old code only ever looked at artistMatches, so this searched the exact
+    // same response twice under two different filters and only kept one of
+    // them; the raw results were already in memory and got discarded.
+    //
+    // This is a distinct failure from not_found (title's not confirmed to
+    // exist under ANY artist) and from wrong_title (artist's real, title
+    // isn't). A title match under a different artist means the record IS
+    // out there -- just not attributed the way Groove said -- which is
+    // neither "absent from the catalogue" nor "hallucinated title," so it
+    // gets its own status rather than being folded into either.
+    const titleMatchElsewhere = storeResults
+      .filter((results) => results !== null)
+      .flat()
+      .find((r) => titlesMatch(r.trackName, rec.track));
+
+    if (titleMatchElsewhere) {
+      queueCacheWrite(cacheWriteBatch, cacheKey, { found: false, confidence: 'misattributed' });
+      return {
+        status: 'misattributed',
+        enriched: null,
+        misattributedArtist: titleMatchElsewhere.artistName || null,
+      };
+    }
+
     queueCacheWrite(cacheWriteBatch, cacheKey, { found: false, confidence: 'not_found' });
     return { status: 'not_found', enriched: null };
   }
