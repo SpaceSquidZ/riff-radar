@@ -2,7 +2,7 @@
 
 *Every closed decision, dated, with rationale. Closed means closed: if you want to reopen one, add a new entry superseding it rather than editing history. Doubles as the evidence trail for the case study.*
 
-**Last updated:** 2026-08-31 — ported into the repo from the archival PDF; D-032 through D-039 added; D-031 status note added; D-020 superseded.
+**Last updated:** 2026-09-01 — ported into the repo from the archival PDF; D-032 through D-039 added; D-031 status note added; D-020 superseded. D-040 through D-043 added; D-036 and D-038 amended; D-037 amended and closed.
 
 > **Transcription note (2026-09-01).** D-001 → D-031 below were transcribed from
 > `0720 NEW/Decision log.pdf`, which is an image-only PDF with no text layer. The wording is
@@ -246,7 +246,6 @@
 |---|---|---|
 | D-019 | Connection-strength formula and per-day cap tuning | Transmission Log pacing |
 | D-036 | Withhold WIDE-tier top tracks entirely, or send tracks 5–10 instead of 1–5 | Pool grounding for mainstream artists |
-| D-037 | Confirm the one-unplayable-card cap and amend AC-9 | UAT acceptance criteria |
 | — | Session-only crate in August, or defer to November? Decision deferred to end of Week 4: build only if intake rebuild finishes on schedule or early. | August scope |
 | — | Whether the arc's true ending ever ships | See D-028 completion risk |
 
@@ -285,18 +284,42 @@
 **Gave up:** verification on that one card. Picking from his own knowledge is where Groove invents titles, so this knowingly accepts a little hallucination risk back on one slot per turn in exchange for not recommending the obvious.
 **Open question:** as written above, or the middle version — send tracks 5–10 instead of 1–5, still real, still verified, past the hits. That gets grounding and novelty, and costs about a third of a day. Preference stated: the middle version, deferred to v1.1 if the Sep 6 freeze is tight.
 
-### D-037 · Playability, not existence, is the shipping constraint — and a track we can't play is a find, not a failure — **OPEN, needs decision**
+**AMENDMENT (2026-09-01) — the approved middle version was tested and failed.** Replaces the decision. WIDE-tier artists (above 1,000,000 listeners) receive their **full verified track list** from the pool. The constraint against recommending the obvious hit moves from the data layer to the prompt.
+
+**Rationale.** The approved middle version — send tracks 5–10 as a percentage band of the top track's playcount — was measured across six artists and failed structurally, twice.
+
+*Non-monotonic curves.* Kendrick Lamar's rank 5 outplays his rank 1; Radiohead and Jaurim both show rank 10 beating rank 5. A percentage band applied to a bumpy curve selects unpredictably rather than selectively.
+
+*Tag fragmentation at track level.* Last.fm splits scrobbles across title spellings the same way it splits them across artist names. プラスティック・ラブ sits at 5.9% of rank 1 and プラスティック・ラヴ at 1.4% — and both are Plastic Love, which is rank 1. A band built to exclude the single obvious hit would have selected that hit three times over, specifically for non-Latin-script catalogues. That is the population D-021 exists to serve, so the failure lands hardest exactly where the feature matters most.
+
+Deduplicating those titles is the D-040 canonicalization problem one level down, and solving it properly means a MusicBrainz *recordings* integration — larger than the artist resolver, for a refinement affecting one slot on famous artists, five days from freeze.
+
+**Gave up (amendment):** a guarantee. A prompt rule can be disobeyed where a data filter cannot. Accepted because this failure is *visible* — Groove names the hit and we can see it — where the band's failure was silent, reporting success while grounding on a mis-tagged duplicate of the hit. Adherence is measured directly: five WIDE-tier seeds, counting how often the surfaced mainstream slot is the artist's rank-1 track.
+
+### D-037 · Playability, not existence, is the shipping constraint — and a track we can't play is a find, not a failure — **CLOSED**
 **Decided:** 2026-08-31
 **Decision:** Playable tracks fill the three slots first. Where fewer than three are available, at most one unplayable track may fill a slot, presented as something worth going after rather than something we failed to deliver. It carries no preview and no artwork, but it must always carry a real destination.
 **Rationale:** Of 100 real, Last.fm-charted tracks from an underground rap pool, only 32% exist on Apple Music. D-006 chose iTunes for the preview and the artwork, so two thirds of genuinely good recommendations currently cannot become a card. Staying silent about them is the worst available failure: a listener expects a music product to know underground music, and silence reads as ignorance rather than caution. D-026 already frames absence as reception failure rather than permission denial — a record that exists but can't be pulled in clean is that principle made literal. And since a track absent from Apple Music is, more often than not, more obscure than one present, the unplayable card is arguably the pick that best serves D-021 rather than the one that fails it.
 **Gave up:** AC-9 as written ("a visitor can hear a preview without leaving the page") now holds for most cards rather than all. That criterion must be amended before UAT or the round will record a Blocker against a deliberate design decision.
 **Open question:** confirm the one-card cap and the "must land somewhere" requirement, and amend AC-9.
 
+**AMENDMENT (2026-09-01) — hunt-card eligibility is narrower than "unplayable."** Only `not_found` is eligible for a hunt card.
+
+`wrong_title` is **excluded**. It is D-034's hallucination signature, and presenting an invented track as worth the dig converts a hallucination into an errand — it sends a listener out looking for a record that does not exist, which is a worse failure than surfacing nothing. `unconfirmed` is excluded per D-043: a network failure is not evidence that a track is real.
+
+The card promises a record exists and is worth finding. That promise is only honest for a candidate we validated as real and merely absent from Apple Music.
+
 ### D-038 · Extended thinking is disabled — **CLOSED**
 **Decided:** 2026-08-31
 **Decision:** `thinking` is set explicitly to disabled in code, not by environment variable. `max_tokens` raised from 4096 to 8000.
 **Rationale:** Thinking was running by default and nobody had chosen it. It consumed 34% of each turn's output tokens and gated all visible text, so a listener watched a blank screen and then received everything at once. Two arms were run on one deployment and 22 cards were rated blind against a decision rule written before any rating: 2.18 / 2.17 / 2.20. Two independent control samples landing 0.01 apart is what makes the comparison trustworthy. Quality unchanged, a third of the wait removed. Separately, the shared 4096 ceiling was the root cause of the blank turns D-033 had to patch around.
 **Gave up:** an unknown amount of reasoning quality that 22 cards cannot detect. A small sample can rule out a large regression, not a small one. The decision is reversible in one line if UAT reports the writing has flattened.
+
+**AMENDMENT (2026-09-01) — the blank-turn root cause claim was incomplete.** The entry records the shared 4096 `max_tokens` ceiling as "the root cause of the blank turns D-033 had to patch around." **That is incomplete.** Two blank turns were reproduced at `max_tokens=8000`, using 805 and 821 output tokens with `stop_reason=end_turn` — nowhere near any ceiling.
+
+Tracing at three points (post-API, post-extraction, pre-client) showed the recommendation marker at character zero of the response. No prose was discarded because none was generated. The 4096 ceiling was *a* cause, on the original evidence; it was not the only one. The remaining cause is model behaviour and is addressed in D-041.
+
+Everything else in D-038 stands — the thinking measurement, the blind rating, the decision rule.
 
 ### D-039 · max_tokens raised from 4096 to 8000 — **CLOSED**
 **Decided:** 2026-08-31
@@ -309,6 +332,44 @@
 **Decision:** Ship date moves to 20 September 2026. Third date; Aug 31 → Sep 13 → Sep 20.
 **Rationale:** Sep 13 placed user testing in the same week as launch, leaving no window to act on what it found — which makes the round a ceremony rather than a test. Sep 20 buys a real one: feature freeze the 6th, pilot the 7th, four sessions the 8th–9th, triage the 10th, a reserved fix block to the 16th, confirmation pass the 17th.
 **Gave up:** a week. Recorded here so the movement reads as a decision rather than drift. This is the last one.
+
+### D-040 · A Last.fm artist is a tag string, not an artist — **CLOSED**
+**Decided:** 2026-09-01
+**Decision:** When `artist.getSimilar` returns an empty graph, resolve the artist through MusicBrainz and retry by MBID. If MusicBrainz fails, is unreachable, or yields no usable graph, return an empty pool rather than a substitute.
+**Rationale:** Last.fm accumulates a co-listening graph per **exact scrobbled tag string**. "Mariya Takeuchi" and 竹内まりや are separate records with disjoint graphs, and `autocorrect=1` does not bridge them — `@attr.artist` came back unchanged, meaning Last.fm does not treat this as an alias relationship at all.
+
+Three string-based approaches were tested and all three failed:
+
+| Approach | Outcome |
+|---|---|
+| `autocorrect=1` | No correction applied. Graph still empty. |
+| `artist.search` + first non-empty graph | Would have selected **Marika Takeuchi**, a Boston contemporary classical pianist, with a full 100-artist graph. |
+| containment + largest graph | Selected `"Mariya Takeuchi • From Smart Shuffle"` — 86 listeners, no MBID, 100-artist graph overlapping the real one by 11. |
+
+Two things make this unfixable by string matching. **A tag with 86 listeners returns a response indistinguishable in shape from one with 35,820** — graph size carries no information about legitimacy. And containment was *structurally* incapable of succeeding: the correct record is the bare 竹内まりや, which does not contain the romanized string at any tuning, so it was never in the candidate set.
+
+MusicBrainz returned the correct entity on the first query, with "Mariya Takeuchi" present in its own alias array, and `getSimilar` by MBID matched the ground-truth graph **100 of 100**.
+
+**Also recorded, because it bounds the problem:** nine of ten deliberately-chosen likely-split artists resolved directly with no fallback — Korean, Cyrillic, Chinese, Icelandic diacritics, and both all-caps and all-lowercase stylizations. This is a narrow exception, not a systemic failure of non-Latin catalogues, and the earlier assumption that it was systemic was wrong.
+**Gave up:** a hard dependency on a third external API, which was observed to be down during its own construction. Contained by a 2-second `AbortController` timeout, an MBID cache, invocation on the miss path only, and fail-closed behaviour verified against that real outage. An empty pool is a state the system already handles and reports; a wrong pool is silent corruption that would surface weeks later as "the recommendations got strange," with no log line to explain it.
+
+### D-041 · Every turn opens with at least one sentence — **CLOSED**
+**Decided:** 2026-09-01
+**Decision:** The prompt requires a minimum of one sentence of Groove's own words before any recommendations, with no exception for short or repeated requests. The existing three-sentence maximum is unchanged — this adds a floor, not a new ceiling.
+**Rationale:** Blank turns were traced to the model emitting the recommendation marker at character zero, skipping its opening entirely. It happened on terse repeat follow-ups — "more please", "anything else in that vein" — where the model appears to treat itself as having already spoken. The prompt capped prose but never required it. Terse repeat follow-ups are precisely what UAT testers produce, and in the 01 Sep city pop session this made the user retype their message twice in a row.
+**Gave up:** nothing measurable. D-033's fallback stays in place as a net for genuinely empty responses, and its firing rate now doubles as the signal that this rule is not holding.
+
+### D-042 · An empty pool is disclosed to the model — **CLOSED**
+**Decided:** 2026-09-01
+**Decision:** When `pool_size` is 0, the turn context states that no verified track list is available and instructs Groove to prefer fewer, surer picks over filling every slot.
+**Rationale:** Groove had no way to distinguish an empty pool from a thin one, and filled the gap by inventing. Of eight measured `wrong_title` cases, **zero** were transliteration near-misses — every one was a plausible-sounding title with no resemblance to anything in the artist's actual catalogue, including "Poison" attributed to both Bebe Winans and Bebe Rexha in the same session. That is D-034's mechanism, and its trigger is an ungrounded turn. Telling the model about its own grounding state is cheaper than any matching-logic change and aims at the cause rather than the symptom.
+**Gave up:** card count on ungrounded turns, deliberately. D-037's hunt card absorbs part of the shortfall, and a thin turn that is honest beats a full turn that is invented.
+
+### D-043 · An unconfirmed validation result is unshippable — **CLOSED**
+**Decided:** 2026-09-01
+**Decision:** `unconfirmed` joins the unshippable validation set. It cannot surface as an ordinary card, and it is not eligible for a hunt card.
+**Rationale:** A candidate that hit a transient iTunes network failure was passing the shippability check and surfacing as a normal card with no artwork, no preview and no Apple Music link — visibly broken rather than excluded, falling through the gap between the ordinary path and the hunt path. Found by a test written for D-037 against a pre-existing defect.
+**Gave up:** nothing. This was a bug.
 
 ---
 
