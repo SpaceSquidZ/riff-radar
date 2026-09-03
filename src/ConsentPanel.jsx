@@ -95,8 +95,11 @@ export default function ConsentPanel({ open, onOpen, onClose }) {
           </p>
 
           <p>
-            Here is what it does not collect: the actual words you write to Groove,
-            or any personal information.
+            Here is what it does not collect: the actual words you write to Groove are
+            never logged to our analytics or stored in our database, and we don't collect
+            any personal information. The words themselves stay in your browser for this
+            session, so refreshing the page doesn't lose the conversation — closing the
+            tab clears them for good.
           </p>
 
           <p>

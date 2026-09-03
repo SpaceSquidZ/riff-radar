@@ -26,6 +26,8 @@ import {
 import { FIRST_CONTACT, ACQUIRE_MS, FIRST_ACQUIRE_MS, pickReturnGreeting } from './grooveOpeners';
 import { pickOpenerPair } from './openerPairs';
 import { crateKey, readCrate, writeCrate, toCrateItem } from './crate';
+import { saveConversation, loadConversation } from './conversationPersistence';
+import { installFacilitatorExport } from './facilitatorExport';
 import { logEvent } from './supabaseClient';
 import { isTester } from './isTester';
 import './riff-radar.css';
@@ -51,15 +53,21 @@ export default function App() {
   // open by default until read, never blocking anything else.
   const [consentOpen, setConsentOpen] = useState(!hasSeenConsent());
 
-  const [sourceTrack, setSourceTrack] = useState(null);
+  // Roadmap v2 Wave 2 item 8 / Milestone 1 DoD: conversation persistence
+  // across refresh (see conversationPersistence.js). Read once, lazily, on
+  // first render -- same pattern as the crate's `useState(() => readCrate())`
+  // below. Null unless there is an actual conversation to resume.
+  const [restoredConversation] = useState(() => loadConversation());
+
+  const [sourceTrack, setSourceTrack] = useState(() => restoredConversation?.sourceTrack ?? null);
   // Brief B, Change 1. Separate from sourceTrack on purpose: sourceTrack only
   // updates on a full track confirmation and still drives the "ON THE TABLE"
   // card; orbitArtist updates on EITHER an artist-only mention or a track
   // confirmation, whichever was most recent, and exists only to seed the
   // Last.fm pool server-side. See resolveSeedArtist in api/lib/lastfm.js.
-  const [orbitArtist, setOrbitArtist] = useState(null);
+  const [orbitArtist, setOrbitArtist] = useState(() => restoredConversation?.orbitArtist ?? null);
 
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => restoredConversation?.messages ?? []);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
@@ -72,10 +80,15 @@ export default function App() {
 
   // The pair shown this session. Held in a ref so re-renders never reshuffle it
   // mid-conversation, which would rewrite a moment the user was part of.
-  const openerPairRef = useRef(null);
+  // Restored alongside messages: it's what opener_pair_id logging and the
+  // API's openerPair field resolve against, and it isn't recoverable from
+  // rendered message text alone.
+  const openerPairRef = useRef(restoredConversation?.openerPair ?? null);
   // Guards the opener against running twice on mount. No longer gated on
-  // consent -- the opener starts unconditionally (D-031, AC-1).
-  const openerStartedRef = useRef(false);
+  // consent -- the opener starts unconditionally (D-031, AC-1). Also true
+  // on mount when a conversation was restored: the opener already ran in
+  // the tab this session came from and must not run again.
+  const openerStartedRef = useRef(!!restoredConversation);
   // True while the channel is pulling the next bubble in. Rendered as
   // acquisition, not as a typing indicator: the design note is that a loading
   // state should be answerable to "what part of the apparatus is this."
@@ -93,7 +106,12 @@ export default function App() {
   const [lastRemoved, setLastRemoved] = useState(null);
   // Counts only USER messages. Arc beats and pool asks are suppressed until
   // this reaches 2, so turn one is just the opener and one real exchange.
-  const userTurnCountRef = useRef(0);
+  // Derived from restored messages on resume, not reset to 0 -- a refresh on
+  // real turn 3 must not report turn 1 to the server, which would wrongly
+  // re-trigger first-exchange-only behavior (e.g. the turn-1 question rule).
+  const userTurnCountRef = useRef(
+    restoredConversation?.messages?.filter((m) => m.role === 'user').length ?? 0
+  );
 
   useEffect(() => {
     const audio = new Audio();
@@ -104,6 +122,9 @@ export default function App() {
       audio.src = '';
     };
   }, []);
+
+  // Brief K5, item 2. No visible control; see facilitatorExport.js.
+  useEffect(() => installFacilitatorExport(), []);
 
   // Every event goes through here so the tester flag and visitor id are attached
   // automatically. visitor_id on EVERY event is what lets any session
@@ -270,6 +291,19 @@ export default function App() {
   useEffect(() => {
     writeCrate(crate);
   }, [crate]);
+
+  // Saves on every turn, including the opener's own staged bubbles, so a
+  // refresh mid-opener also resumes cleanly rather than only after the first
+  // real exchange. openerPairRef is a ref (not reactive) but is always set
+  // before the first message that could exist, so reading it here is safe.
+  useEffect(() => {
+    saveConversation({
+      messages,
+      sourceTrack,
+      orbitArtist,
+      openerPair: openerPairRef.current,
+    });
+  }, [messages, sourceTrack, orbitArtist]);
 
   const savedKeys = new Set(crate.map(crateKey));
 
