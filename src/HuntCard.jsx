@@ -18,17 +18,29 @@
 
 import NoveltyControl from './NoveltyControl';
 
-function RadarIcon() {
-  // The static, same-every-time artwork treatment the brief asks for --
-  // "not an empty box... should look intentional." A radar sweep ties back
-  // to the product name rather than reading as a missing-image placeholder.
+// K3c. The concentric-ring RadarIcon this replaces read as "no signal,"
+// which framed the card as a failure rather than a find. This is a chart
+// with one marked position instead -- same image every time, so it reads as
+// a state rather than a missing image. See .hunt-chart in riff-radar.css for
+// the --signal/--line/--text-faint token mapping.
+function HuntChart() {
   return (
-    <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false">
-      <circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" strokeWidth="1.1" opacity="0.35" />
-      <circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" strokeWidth="1.1" opacity="0.5" />
-      <circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.1" opacity="0.7" />
-      <path d="M12 12L12 3.2A8.8 8.8 0 0 1 19.6 8.2z" fill="currentColor" opacity="0.28" />
-      <circle cx="12" cy="12" r="1.3" fill="currentColor" />
+    <svg viewBox="0 0 120 100" aria-hidden="true" className="hunt-chart">
+      <path className="hc-line" d="M18 74 L34 52 L52 60 L64 42" />
+      <path className="hc-line" d="M64 42 L88 30 L102 48" />
+      <path className="hc-line" d="M34 52 L40 26 L64 42" opacity=".55" />
+      <circle className="hc-star tw" cx="18" cy="74" r="1.7" />
+      <circle className="hc-star" cx="34" cy="52" r="1.4" />
+      <circle className="hc-star tw" cx="52" cy="60" r="1.1" />
+      <circle className="hc-star" cx="40" cy="26" r="1.5" />
+      <circle className="hc-star tw" cx="88" cy="30" r="1.6" />
+      <circle className="hc-star" cx="102" cy="48" r="1.2" />
+      <circle className="hc-star tw" cx="76" cy="80" r="1.3" />
+      <circle className="hc-star" cx="24" cy="34" r="1" />
+      <circle className="hc-star tw" cx="108" cy="72" r="1" />
+      <circle className="hc-ring hc-ring--a" cx="64" cy="42" r="9" />
+      <circle className="hc-ring hc-ring--b" cx="64" cy="42" r="9" />
+      <circle className="hc-mark" cx="64" cy="42" r="3.4" />
     </svg>
   );
 }
@@ -113,7 +125,7 @@ export default function HuntCard({ rec, onOutboundClick, isSaved, onToggleSave, 
       <div className="rec-row rec-row-hunt">
         <div className="rec-row-art">
           <div className="rec-row-artwork rec-row-artwork-hunt" aria-hidden="true">
-            <RadarIcon />
+            <HuntChart />
           </div>
         </div>
 

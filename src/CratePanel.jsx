@@ -12,6 +12,8 @@
 // possible at all, and something that materialises the first time you save is
 // something you had no reason to try.
 
+import { connectionLabel } from './RecommendationCard';
+
 function StarIcon({ filled }) {
   return (
     <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false">
@@ -144,6 +146,12 @@ export default function CratePanel({
                 const key = `${item.track}::${item.artist}`;
                 const isPlaying = activePreviewKey === key;
                 const spotifyUrl = spotifySearchUrl(item.track, item.artist);
+                // K3d: connection labels carry through onto crate rows -- six
+                // months later the label is the only record of why something
+                // was kept. Same per-card-type pill logic as RecommendationCard
+                // and HuntCard: hunt items never had a resolvable label to
+                // begin with, so they get "Worth the dig" instead.
+                const label = item.isHunt ? null : connectionLabel(item.connectionType);
 
                 return (
                   <li className="crate-item" key={key}>
@@ -154,6 +162,11 @@ export default function CratePanel({
                     )}
 
                     <div className="crate-item-body">
+                      <div className="crate-item-header">
+                        {item.isHunt && <span className="crate-pill crate-pill-hunt">Worth the dig</span>}
+                        {label && <span className="crate-pill">{label}</span>}
+                        {item.distant && <span className="crate-pill">Far signal</span>}
+                      </div>
                       <p className="crate-item-title">{item.track}</p>
                       <p className="crate-item-artist">{item.artist}</p>
                     </div>

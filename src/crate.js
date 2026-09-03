@@ -51,9 +51,14 @@ export function writeCrate(items) {
 
 /**
  * Only the fields the crate panel actually renders. Recommendation objects
- * carry explanations, connection types, ranks and validation status, none of
- * which belong in a saved list: the crate is the user's shelf, not a transcript
- * of why Groove suggested something.
+ * carry explanations, ranks and validation status, none of which belong in a
+ * saved list: the crate is the user's shelf, not a transcript of why Groove
+ * suggested something.
+ *
+ * connectionType/distant/isHunt are the one exception (K3d, amending the
+ * original version of this comment, which excluded them too): six months
+ * later the connection label is the only record of why something was kept,
+ * so it carries through onto the crate row rather than getting stripped.
  */
 export function toCrateItem(rec, source = 'recommendation') {
   return {
@@ -64,6 +69,9 @@ export function toCrateItem(rec, source = 'recommendation') {
     artworkUrl: rec.artworkUrl || null,
     previewUrl: rec.previewUrl || null,
     trackViewUrl: rec.trackViewUrl || null,
+    connectionType: rec.connectionType || null,
+    distant: !!rec.distant,
+    isHunt: !!rec.isHunt,
     source,
     savedAt: Date.now(),
   };

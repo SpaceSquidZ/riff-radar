@@ -901,16 +901,38 @@ export default function App() {
         {/* Required attribution under Apple's and Last.fm's terms, not
             decorative fine print -- 0.55 opacity read as arguably too faint
             to count as displayed; raised to 0.70. */}
-        <p
+        <div
           style={{
             margin: '1.5rem 0 0 0',
-            fontSize: '0.75rem',
-            opacity: 0.7,
-            textAlign: 'center',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            flexWrap: 'wrap',
           }}
         >
-          Preview audio provided courtesy of iTunes. Recommendation data powered by AudioScrobbler from Last.fm.
-        </p>
+          {/* K4: Apple's terms require the "provided courtesy of iTunes" text
+              AND promotional content sitting proximate to an official Apple
+              badge asset, not a generic icon. The badge itself is a
+              trademarked file Apple issues through its own marketing-tools
+              site under license terms -- not something to reconstruct from
+              scratch here. TEXT is shipped; the badge asset still needs to
+              be sourced and dropped in next to it, e.g. as
+              /public/badges/apple-music-badge.svg, then rendered here. */}
+          <p style={{ fontSize: '0.75rem', opacity: 0.7, margin: 0 }}>
+            Preview audio provided courtesy of iTunes.
+          </p>
+
+          {/* K4: Last.fm credit is blocked on written approval for BUTTON
+              placement (clause 2.7), not yet answered. This text line is a
+              separate, already-compliant attribution and stays as-is. The
+              slot below is reserved for the approved button and must stay
+              empty -- no substitute button -- until that approval lands. */}
+          <p style={{ fontSize: '0.75rem', opacity: 0.7, margin: 0 }}>
+            Recommendation data powered by AudioScrobbler from Last.fm.
+          </p>
+          {/* <LastFmAttributionButton /> -- slot, pending clause 2.7 */}
+        </div>
       </div>
 
       <CratePanel
