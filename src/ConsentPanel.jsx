@@ -2,13 +2,9 @@
 //
 // D-031's actual shape (rebuilt 2026-08-31 — the July 2026 "closed" version
 // was never really built; see the Decision Log status note on D-031). A
-// collapsible RIGHT-edge drawer, built on the same tab/drawer/scrim pattern
-// as CratePanel (src/CratePanel.jsx) but mirrored to the opposite edge and
-// made visually subordinate to it: the crate is a feature people reach for
-// repeatedly, this is a disclosure people read once and maybe touch twice.
-// Two drawers sharing one edge would read as related functions; opposite
-// edges keep them apart, and a right-edge control conventionally reads as
-// meta/settings rather than content, which is what this actually is.
+// RIGHT-edge drawer, on the opposite edge from CratePanel (src/CratePanel.jsx)
+// and visually subordinate to it: the crate is a feature people reach for
+// repeatedly, this is a disclosure people read once and dismiss for good.
 //
 // OPEN BY DEFAULT (until read), not hidden behind discovery — the opposite
 // default from the crate. This is a disclosure; it has to be seen, not
@@ -16,6 +12,14 @@
 // this panel to close (see the removed `if (showConsent) return` this
 // replaces — that gate was an AC-1 failure, blocking Groove's opener behind
 // a UI element the D-031 spec explicitly says must not block it).
+//
+// Brief M, P0-4. No persistent tab, no toggle, no re-open affordance --
+// decided 2 Sep, dropped in the original briefing. This used to render an
+// always-visible tab that reopened the drawer after Accept/Decline, which
+// contradicted the "dismisses for good" intent. Dismissing it (by any of
+// Accept, Decline, the close button, or the scrim) closes it and there is
+// nothing left on screen to bring it back with -- only a fresh page load
+// with hasSeenConsent() still false shows it again.
 //
 // DECLINE IS REAL, not cosmetic. hasDeclinedConsent() is checked by emit()
 // in App.jsx and short-circuits BEFORE logEvent is ever called — declining
@@ -44,7 +48,7 @@ function markConsentDeclined() {
 // moment specifically. hasDeclinedConsent() lives in localStorage, and
 // emit() in App.jsx reads it fresh on every call -- the flag itself IS the
 // wiring, not a React state value threaded back up.
-export default function ConsentPanel({ open, onOpen, onClose }) {
+export default function ConsentPanel({ open, onClose }) {
   function handleAccept() {
     markConsentSeen();
     onClose();
@@ -58,16 +62,6 @@ export default function ConsentPanel({ open, onOpen, onClose }) {
 
   return (
     <>
-      <button
-        type="button"
-        className={`consent-tab${open ? ' consent-tab-open' : ''}`}
-        onClick={open ? onClose : onOpen}
-        aria-label={open ? 'Close privacy notice' : 'Open privacy notice'}
-        aria-expanded={open}
-      >
-        <span className="consent-tab-label">Privacy</span>
-      </button>
-
       {open && <div className="consent-scrim" onClick={onClose} aria-hidden="true" />}
 
       <aside

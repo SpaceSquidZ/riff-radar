@@ -2021,63 +2021,16 @@ body {
 }
 
 /* ===========================================================================
-   CONSENT PANEL (D-031, rebuilt 2026-08-31)
+   CONSENT PANEL (D-031, rebuilt 2026-08-31; tab removed per Brief M, P0-4)
 
-   Same tab/drawer/scrim pattern as the crate above, deliberately mirrored to
-   the RIGHT edge and made visually quieter: two drawers on one edge would
-   read as related functions, and they are not -- the crate is a feature
-   people reach for repeatedly, this is a disclosure read once and touched
-   at most twice. A right-edge control also conventionally reads as
-   meta/settings rather than content, so this needs no new convention to be
-   understood.
-
-   BOTTOM placement, not vertically centered like the crate tab (top: 50%)
-   -- placed with real clearance from the bottom-right corner because that
-   corner is where the Vercel Toolbar renders on preview deployments (it is
-   injected by Vercel's platform at the edge/proxy level, not part of this
-   app's own bundle -- nothing in this repo positions anything there, so it
-   could not be checked directly; confirm no collision once actually
-   deployed).
+   A RIGHT-edge drawer, opposite the crate. Brief M, P0-4: this used to be a
+   tab/drawer/scrim pattern matching the crate's, but the tab reopened the
+   drawer after Accept/Decline, contradicting "dismisses for good." No tab
+   anymore -- the drawer opens on mount if unseen, and closing it by any
+   path (Accept, Decline, the close button, or the scrim) leaves nothing on
+   screen to bring it back with. Only a fresh page load with
+   hasSeenConsent() still false shows it again.
    =========================================================================== */
-
-.consent-tab {
-  position: fixed;
-  right: 0;
-  bottom: 110px;
-  z-index: 39;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 5px 9px 4px;
-  background: #1e2027;
-  border: 1px solid #2b2e38;
-  border-right: none;
-  border-radius: 8px 0 0 8px;
-  color: #71747f;
-  cursor: pointer;
-  font-family: inherit;
-  box-shadow: -2px 0 6px rgba(0, 0, 0, 0.22);
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.consent-tab:hover {
-  background: #24262d;
-  color: #9a9daa;
-}
-
-.consent-tab-open {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.consent-tab-label {
-  font-size: 8px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  writing-mode: vertical-rl;
-  font-weight: 500;
-}
 
 .consent-scrim {
   position: fixed;
@@ -2194,17 +2147,7 @@ body {
   opacity: 0.85;
 }
 
-/* Mobile: the crate tab moves to bottom: 84px on the LEFT (see
-   .crate-tab above) to clear the reading column and stay thumb-reachable.
-   This mirrors the same vertical band on the RIGHT so both edge controls
-   read as one consistent system -- opposite edges mean they cannot
-   collide with each other regardless. */
 @media (max-width: 700px) {
-  .consent-tab {
-    bottom: 84px;
-    padding: 7px 4px 8px 3px;
-  }
-
   /* MUST, not a watch item: an 88vw side drawer open by default on a phone
      covers the chat column, which is functionally the opener gate that was
      just deleted from App.jsx -- arriving back as CSS instead of code. A

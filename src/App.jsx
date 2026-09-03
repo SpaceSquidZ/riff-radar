@@ -961,7 +961,6 @@ export default function App() {
 
       <ConsentPanel
         open={consentOpen}
-        onOpen={() => setConsentOpen(true)}
         onClose={() => setConsentOpen(false)}
       />
     </>
