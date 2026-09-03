@@ -613,6 +613,33 @@ export default function App() {
     });
   }
 
+  // K1. Re-tappable: a mis-tap must be correctable, and correcting it logs a
+  // SECOND event rather than silently overwriting the first -- the first
+  // answer is the honest one and needs to stay recoverable. is_change is
+  // keyed off the prior value already on the card, so a mis-tap-and-fix
+  // produces exactly one is_change:true event, not a chain of them.
+  function handleNoveltyReport(messageId, recIndex, novelty) {
+    const msg = messages.find((m) => m.id === messageId);
+    const rec = msg?.recs?.[recIndex];
+    if (!rec) return;
+    const isChange = rec.novelty != null && rec.novelty !== novelty;
+
+    updateMessageById(messageId, (m) => ({
+      ...m,
+      recs: m.recs.map((r, idx) => (idx === recIndex ? { ...r, novelty } : r)),
+    }));
+
+    emit('rec_novelty_reported', {
+      track: rec.track,
+      artist: rec.artist,
+      connection_type: rec.connectionType || null,
+      surfaced_rank: rec._rank ?? null,
+      novelty,
+      is_change: isChange,
+      is_hunt_card: !!rec.isHunt,
+    });
+  }
+
   function handleOutboundClick({ track, artist, service, url, source }) {
     emit('outbound_click', {
       track,
@@ -741,6 +768,9 @@ export default function App() {
                                     onOutboundClick={handleOutboundClick}
                                     isSaved={savedKeys.has(crateKey(rec))}
                                     onToggleSave={(r) => handleToggleSave(r, 'recommendation')}
+                                    onNoveltyReport={(novelty) =>
+                                      handleNoveltyReport(msg.id, j, novelty)
+                                    }
                                   />
                                 ) : (
                                   <RecommendationCard
@@ -751,6 +781,9 @@ export default function App() {
                                     onOutboundClick={handleOutboundClick}
                                     isSaved={savedKeys.has(crateKey(rec))}
                                     onToggleSave={(r) => handleToggleSave(r, 'recommendation')}
+                                    onNoveltyReport={(novelty) =>
+                                      handleNoveltyReport(msg.id, j, novelty)
+                                    }
                                   />
                                 )
                               )}

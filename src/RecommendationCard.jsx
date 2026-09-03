@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import NoveltyControl from './NoveltyControl';
 
 // Inline SVG so there's no icon library dependency and no extra network
 // request. Simple glyph marks used to label the outbound link to each service.
@@ -109,6 +110,7 @@ export default function RecommendationCard({
   onOutboundClick,
   isSaved,
   onToggleSave,
+  onNoveltyReport,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
@@ -137,102 +139,108 @@ export default function RecommendationCard({
   const spotifyUrl = spotifySearchUrl(rec.track, rec.artist);
 
   return (
-    <div className="rec-row">
-      <div className="rec-row-art">
-        {hasArtwork ? (
-          <img src={rec.artworkUrl} alt="" className="rec-row-artwork" />
-        ) : (
-          <div className="rec-row-artwork rec-row-artwork-empty" aria-hidden="true" />
-        )}
-      </div>
-
-      <div className="rec-row-body">
-        <div className="rec-row-header">
-          {label && <span className="rec-pill">{label}</span>}
-          {/* DISTANT is a tag, never a type: far in language, geography, or era,
-              but still carrying a real connection underneath. */}
-          {rec.distant && <span className="rec-pill rec-pill-distant">Distant</span>}
-          {metaLine && <span className="rec-row-meta">{metaLine}</span>}
+    <div className="rec-card">
+      <div className="rec-row">
+        <div className="rec-row-art">
+          {hasArtwork ? (
+            <img src={rec.artworkUrl} alt="" className="rec-row-artwork" />
+          ) : (
+            <div className="rec-row-artwork rec-row-artwork-empty" aria-hidden="true" />
+          )}
         </div>
 
-        <p className="rec-row-title">{rec.track}</p>
-        <p className="rec-row-artist">{rec.artist}</p>
+        <div className="rec-row-body">
+          <div className="rec-row-header">
+            {label && <span className="rec-pill">{label}</span>}
+            {/* DISTANT is a tag, never a type: far in language, geography, or era,
+                but still carrying a real connection underneath. */}
+            {rec.distant && <span className="rec-pill rec-pill-distant">Distant</span>}
+            {metaLine && <span className="rec-row-meta">{metaLine}</span>}
+          </div>
 
-        {rec.explanation && (
-          <>
-            <p
-              ref={explanationRef}
-              className={`rec-row-explanation${expanded ? ' expanded' : ''}`}
-            >
-              {rec.explanation}
-            </p>
-            {isOverflowing && (
-              <button
-                type="button"
-                className="rec-read-more"
-                onClick={() => setExpanded((e) => !e)}
+          <p className="rec-row-title">{rec.track}</p>
+          <p className="rec-row-artist">{rec.artist}</p>
+
+          {rec.explanation && (
+            <>
+              <p
+                ref={explanationRef}
+                className={`rec-row-explanation${expanded ? ' expanded' : ''}`}
               >
-                {expanded ? 'Show less' : 'Read more'}
-              </button>
+                {rec.explanation}
+              </p>
+              {isOverflowing && (
+                <button
+                  type="button"
+                  className="rec-read-more"
+                  onClick={() => setExpanded((e) => !e)}
+                >
+                  {expanded ? 'Show less' : 'Read more'}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="rec-row-actions">
+          {onToggleSave && (
+            <button
+              type="button"
+              onClick={() => onToggleSave(rec)}
+              className={`rec-row-save${isSaved ? ' rec-row-save-on' : ''}`}
+              aria-label={isSaved ? `Remove ${rec.track} from crate` : `Save ${rec.track} to crate`}
+              aria-pressed={!!isSaved}
+              title={isSaved ? 'In your crate' : 'Keep this'}
+            >
+              <StarIcon filled={!!isSaved} />
+            </button>
+          )}
+
+          {hasPreview && (
+            <button
+              type="button"
+              onClick={onTogglePlay}
+              className="rec-row-play"
+              aria-label={isPlaying ? 'Pause preview' : 'Play 30 second preview'}
+              title={isPlaying ? 'Pause preview' : 'Play 30s preview'}
+            >
+              <PlayIcon playing={isPlaying} />
+            </button>
+          )}
+
+          <div className="rec-row-links">
+            {hasAppleMusicLink && (
+              <a
+                href={rec.trackViewUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rec-icon-link"
+                aria-label="Open in Apple Music"
+                title="Apple Music"
+                onClick={() => logOutbound('apple_music', rec.trackViewUrl)}
+              >
+                <AppleMusicIcon />
+              </a>
             )}
-          </>
-        )}
-      </div>
 
-      <div className="rec-row-actions">
-        {onToggleSave && (
-          <button
-            type="button"
-            onClick={() => onToggleSave(rec)}
-            className={`rec-row-save${isSaved ? ' rec-row-save-on' : ''}`}
-            aria-label={isSaved ? `Remove ${rec.track} from crate` : `Save ${rec.track} to crate`}
-            aria-pressed={!!isSaved}
-            title={isSaved ? 'In your crate' : 'Keep this'}
-          >
-            <StarIcon filled={!!isSaved} />
-          </button>
-        )}
-
-        {hasPreview && (
-          <button
-            type="button"
-            onClick={onTogglePlay}
-            className="rec-row-play"
-            aria-label={isPlaying ? 'Pause preview' : 'Play 30 second preview'}
-            title={isPlaying ? 'Pause preview' : 'Play 30s preview'}
-          >
-            <PlayIcon playing={isPlaying} />
-          </button>
-        )}
-
-        <div className="rec-row-links">
-          {hasAppleMusicLink && (
             <a
-              href={rec.trackViewUrl}
+              href={spotifyUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="rec-icon-link"
-              aria-label="Open in Apple Music"
-              title="Apple Music"
-              onClick={() => logOutbound('apple_music', rec.trackViewUrl)}
+              aria-label="Search on Spotify"
+              title="Spotify"
+              onClick={() => logOutbound('spotify', spotifyUrl)}
             >
-              <AppleMusicIcon />
+              <SpotifyIcon />
             </a>
-          )}
-
-          <a
-            href={spotifyUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="rec-icon-link"
-            aria-label="Search on Spotify"
-            title="Spotify"
-            onClick={() => logOutbound('spotify', spotifyUrl)}
-          >
-            <SpotifyIcon />
-          </a>
+          </div>
         </div>
       </div>
+
+      {onNoveltyReport && (
+        <NoveltyControl novelty={rec.novelty} onReport={onNoveltyReport} />
+      )}
     </div>
   );
 }

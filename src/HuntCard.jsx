@@ -11,6 +11,12 @@
 // differently-ordered link set, a different line register. Threading that
 // through the existing component as conditionals would obscure more than
 // it would share.
+//
+// The K1 novelty control is the one exception -- it's identical between the
+// two card types, so it's a shared NoveltyControl component rather than a
+// third copy of the same two buttons.
+
+import NoveltyControl from './NoveltyControl';
 
 function RadarIcon() {
   // The static, same-every-time artwork treatment the brief asks for --
@@ -92,7 +98,7 @@ function youtubeSearchUrl(track, artist) {
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(`${track} ${artist}`)}`;
 }
 
-export default function HuntCard({ rec, onOutboundClick, isSaved, onToggleSave }) {
+export default function HuntCard({ rec, onOutboundClick, isSaved, onToggleSave, onNoveltyReport }) {
   const metaLine = [rec.releaseYear, rec.genre].filter(Boolean).join(' · ');
   const spotifyUrl = spotifySearchUrl(rec.track, rec.artist);
   const bandcampUrl = bandcampSearchUrl(rec.track, rec.artist);
@@ -103,84 +109,90 @@ export default function HuntCard({ rec, onOutboundClick, isSaved, onToggleSave }
   }
 
   return (
-    <div className="rec-row rec-row-hunt">
-      <div className="rec-row-art">
-        <div className="rec-row-artwork rec-row-artwork-hunt" aria-hidden="true">
-          <RadarIcon />
+    <div className="rec-card">
+      <div className="rec-row rec-row-hunt">
+        <div className="rec-row-art">
+          <div className="rec-row-artwork rec-row-artwork-hunt" aria-hidden="true">
+            <RadarIcon />
+          </div>
+        </div>
+
+        <div className="rec-row-body">
+          <div className="rec-row-header">
+            <span className="rec-pill rec-pill-hunt">Worth the dig</span>
+            {metaLine && <span className="rec-row-meta">{metaLine}</span>}
+          </div>
+
+          <p className="rec-row-title">{rec.track}</p>
+          <p className="rec-row-artist">{rec.artist}</p>
+
+          {rec.explanation && <p className="rec-row-explanation">{rec.explanation}</p>}
+
+          {/* Not a badge, not a warning -- lead, not fault. */}
+          <p className="rec-row-hunt-line">
+            This one I can't pull in clean. It's out there though — worth the dig.
+          </p>
+        </div>
+
+        <div className="rec-row-actions">
+          {onToggleSave && (
+            <button
+              type="button"
+              onClick={() => onToggleSave(rec)}
+              className={`rec-row-save${isSaved ? ' rec-row-save-on' : ''}`}
+              aria-label={isSaved ? `Remove ${rec.track} from crate` : `Save ${rec.track} to crate`}
+              aria-pressed={!!isSaved}
+              title={isSaved ? 'In your crate' : 'Keep this'}
+            >
+              <StarIcon filled={!!isSaved} />
+            </button>
+          )}
+
+          {/* No preview control at all -- absent, not present-and-dead. There
+              is never a previewUrl for a 'not_found' candidate, so this is
+              simply omitted rather than rendered disabled. */}
+
+          <div className="rec-row-links">
+            <a
+              href={spotifyUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rec-icon-link"
+              aria-label="Search on Spotify"
+              title="Spotify"
+              onClick={() => logOutbound('spotify', spotifyUrl)}
+            >
+              <SpotifyIcon />
+            </a>
+            <a
+              href={bandcampUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rec-icon-link"
+              aria-label="Search on Bandcamp"
+              title="Bandcamp"
+              onClick={() => logOutbound('bandcamp', bandcampUrl)}
+            >
+              <BandcampIcon />
+            </a>
+            <a
+              href={youtubeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rec-icon-link"
+              aria-label="Search on YouTube"
+              title="YouTube"
+              onClick={() => logOutbound('youtube', youtubeUrl)}
+            >
+              <YouTubeIcon />
+            </a>
+          </div>
         </div>
       </div>
 
-      <div className="rec-row-body">
-        <div className="rec-row-header">
-          <span className="rec-pill rec-pill-hunt">Worth the dig</span>
-          {metaLine && <span className="rec-row-meta">{metaLine}</span>}
-        </div>
-
-        <p className="rec-row-title">{rec.track}</p>
-        <p className="rec-row-artist">{rec.artist}</p>
-
-        {rec.explanation && <p className="rec-row-explanation">{rec.explanation}</p>}
-
-        {/* Not a badge, not a warning -- lead, not fault. */}
-        <p className="rec-row-hunt-line">
-          This one I can't pull in clean. It's out there though — worth the dig.
-        </p>
-      </div>
-
-      <div className="rec-row-actions">
-        {onToggleSave && (
-          <button
-            type="button"
-            onClick={() => onToggleSave(rec)}
-            className={`rec-row-save${isSaved ? ' rec-row-save-on' : ''}`}
-            aria-label={isSaved ? `Remove ${rec.track} from crate` : `Save ${rec.track} to crate`}
-            aria-pressed={!!isSaved}
-            title={isSaved ? 'In your crate' : 'Keep this'}
-          >
-            <StarIcon filled={!!isSaved} />
-          </button>
-        )}
-
-        {/* No preview control at all -- absent, not present-and-dead. There
-            is never a previewUrl for a 'not_found' candidate, so this is
-            simply omitted rather than rendered disabled. */}
-
-        <div className="rec-row-links">
-          <a
-            href={spotifyUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="rec-icon-link"
-            aria-label="Search on Spotify"
-            title="Spotify"
-            onClick={() => logOutbound('spotify', spotifyUrl)}
-          >
-            <SpotifyIcon />
-          </a>
-          <a
-            href={bandcampUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="rec-icon-link"
-            aria-label="Search on Bandcamp"
-            title="Bandcamp"
-            onClick={() => logOutbound('bandcamp', bandcampUrl)}
-          >
-            <BandcampIcon />
-          </a>
-          <a
-            href={youtubeUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="rec-icon-link"
-            aria-label="Search on YouTube"
-            title="YouTube"
-            onClick={() => logOutbound('youtube', youtubeUrl)}
-          >
-            <YouTubeIcon />
-          </a>
-        </div>
-      </div>
+      {onNoveltyReport && (
+        <NoveltyControl novelty={rec.novelty} onReport={onNoveltyReport} />
+      )}
     </div>
   );
 }

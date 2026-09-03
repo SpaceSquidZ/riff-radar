@@ -553,6 +553,10 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
     padding-left: 68px; /* line up under the text, past the artwork */
   }
 
+  .rec-novelty-row {
+    margin-left: 68px; /* same alignment as .rec-row-actions above */
+  }
+
   .chat-bubble {
     max-width: 100%;
   }
@@ -983,6 +987,56 @@ body {
   font-size: 12px;
   font-style: italic;
   margin-top: 2px;
+}
+
+/* --- Novelty self-report (Brief K1) ---
+   Shared by RecommendationCard and HuntCard. Sits below the paper-label
+   card, on the dark room background, not inside it -- "a slim row below
+   the action row, separated from it, not competing with Preview for
+   attention." Monospace label register, same as .signal-acquiring-label:
+   this is instrumentation reading, not conversation. */
+.rec-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.rec-novelty-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 4px 0;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.rec-novelty-prompt {
+  color: #7d7768;
+}
+
+.rec-novelty-btn {
+  background: transparent;
+  border: 1px solid #45443c;
+  color: #a8a294;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  padding: 3px 9px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.rec-novelty-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* Selected state persists visually for the rest of the session -- same dark
+   "hardware" treatment as the play/link controls on the card itself. */
+.rec-novelty-btn-selected,
+.rec-novelty-btn-selected:hover {
+  background: #24231f;
+  border-color: #14130f;
+  color: #ece8dd;
 }
 
 /* --- Opener records: the same stock, quieter ---
