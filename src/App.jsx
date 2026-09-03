@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import ConsentPanel, { hasSeenConsent, hasDeclinedConsent } from './ConsentPanel';
 import MessageContent from './MessageContent';
-import RecommendationCard from './RecommendationCard';
+import RecommendationCard, { connectionLabel } from './RecommendationCard';
 import HuntCard from './HuntCard';
 import OpenerRecord from './OpenerRecord';
 import InputTrackCard from './InputTrackCard';
@@ -306,6 +306,20 @@ export default function App() {
   }, [messages, sourceTrack, orbitArtist]);
 
   const savedKeys = new Set(crate.map(crateKey));
+
+  // K5b. Derived from `messages` itself rather than a separate "shown" flag:
+  // whichever assistant message is chronologically first to carry a labeled
+  // (non-hunt) card is where the explainer renders, every render. That
+  // guarantees exactly one appearance without any extra state to track, and
+  // it survives a refresh for free since `messages` itself is now persisted
+  // (see conversationPersistence.js) -- a restored session correctly finds
+  // the same message it already found before the refresh, not a new one.
+  const firstLabeledMessage = messages.find(
+    (m) =>
+      m.role === 'assistant' &&
+      Array.isArray(m.recs) &&
+      m.recs.some((r) => !r.isHunt && connectionLabel(r.connectionType))
+  );
 
   function handleToggleSave(item, source = 'recommendation') {
     const key = crateKey(item);
@@ -759,6 +773,16 @@ export default function App() {
 
                         {msg.role === 'assistant' && msg.recs && msg.recs.length > 0 && (
                           <>
+                            {/* K5b. Placed with the first card set, not before it --
+                                the line makes sense once there is something to
+                                point at. Static and hand-written, never model text
+                                (same reasoning as the opener script, D-030): a line
+                                this load-bearing should not be left to paraphrase. */}
+                            {firstLabeledMessage?.id === msg.id && (
+                              <p className="rec-label-explainer">
+                                I sort these by how they&apos;re connected, not by how they sound.
+                              </p>
+                            )}
                             <div className="rec-rows">
                               {msg.recs.map((rec, j) =>
                                 rec.isHunt ? (

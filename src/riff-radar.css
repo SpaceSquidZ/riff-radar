@@ -363,6 +363,18 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   font-style: italic;
 }
 
+/* K5b. Groove's one-time explanation of the connection-label system, placed
+   with the first card set. Same "outside the bubble" register as
+   .rec-preparing-line above, but closer to bubble-text weight -- this is
+   dialogue meant to be read, not a status line. */
+.rec-label-explainer {
+  margin: 10px 0 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #c9c6ba;
+  font-style: italic;
+}
+
 /* --- Recommendations: horizontal rows, not columns --- */
 
 .rec-rows {

@@ -74,18 +74,30 @@ function PlayIcon({ playing }) {
 //
 // Stored snake_case so the model produces a constrained token rather than a
 // display string it might punctuate differently every time.
+//
+// Brief K5a (approved 01 Sep): display strings only, internal keys
+// untouched. same_move and same_scene and same_mechanism were slippery even
+// to the people who wrote them; the new words separate surface from depth --
+// "Same trick" means they do the literally same thing, "Different route"
+// means they reach the same effect by other means. The [recs] counters, the
+// event schema, the fixture suites and every Decision Log entry from D-022
+// onward reference the snake_case keys directly, so renaming those would
+// break three weeks of counters for no gain.
 const CONNECTION_LABELS = {
-  same_hand: 'Same hand',
+  same_hand: 'Same hands',
   lineage: 'Lineage',
-  same_move: 'Same move',
-  same_scene: 'Same scene',
-  same_mechanism: 'Same mechanism',
+  same_move: 'Same trick',
+  same_scene: 'Same room',
+  same_mechanism: 'Different route',
   // "Second listen" is the sixth type, deferred to November (D-024): it needs
-  // rapport, which needs memory, which needs accounts.
+  // rapport, which needs memory, which needs accounts. Not in the K5a table,
+  // so left unchanged.
   second_listen: 'Second listen',
 };
 
-function connectionLabel(type) {
+// Exported for App.jsx: K5b needs to know whether a given rec actually
+// carries a resolvable label, to find the first card set that does.
+export function connectionLabel(type) {
   if (!type) return null;
   const key = String(type).toLowerCase().replace(/[\s-]+/g, '_');
   return CONNECTION_LABELS[key] || null;
@@ -153,8 +165,9 @@ export default function RecommendationCard({
           <div className="rec-row-header">
             {label && <span className="rec-pill">{label}</span>}
             {/* DISTANT is a tag, never a type: far in language, geography, or era,
-                but still carrying a real connection underneath. */}
-            {rec.distant && <span className="rec-pill rec-pill-distant">Distant</span>}
+                but still carrying a real connection underneath. Display string
+                only (K5a) -- rec.distant itself is unchanged. */}
+            {rec.distant && <span className="rec-pill rec-pill-distant">Far signal</span>}
             {metaLine && <span className="rec-row-meta">{metaLine}</span>}
           </div>
 
