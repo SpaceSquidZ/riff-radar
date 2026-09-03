@@ -639,11 +639,13 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
    auto-grows in App.jsx up to a 160px ceiling, after which it scrolls
    vertically like any chat app. */
 .chat-input {
-  flex: 1;
+  width: 100%;
   font-size: 16px; /* same iOS-zoom guard as the form inputs */
   font-family: inherit;
   line-height: 1.5;
-  padding: 10px 12px;
+  /* Right padding clears .chat-send-btn (Brief M, P0-6) so typed text never
+     runs under it. */
+  padding: 10px 40px 10px 12px;
   border: 1px solid #3a3d48;
   border-radius: 10px;
   background: #1e2029;
@@ -653,6 +655,45 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   box-sizing: border-box;
   min-height: 42px;
   max-height: 160px;
+  display: block;
+}
+
+/* Brief M, P0-6. Send moves inside the field -- right side, vertically
+   centred, the convention every messaging interface uses. Wrap is the
+   positioning context; the button is absolute within it so it overlays the
+   textarea's own right-padding rather than sitting beside it as a second
+   flex item. */
+.chat-input-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.chat-send-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid #3a3d48;
+  background: #2a2c36;
+  color: #e8e8e8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.chat-send-btn:hover:not(:disabled) {
+  background: #34363f;
+}
+
+.chat-send-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .chat-input::placeholder {
@@ -1301,10 +1342,23 @@ body {
 
 /* The input matches the column exactly. A narrower input inside a wider column
    reads as a floating widget rather than part of the same device. */
+/* Brief M, P0-6. Pinned to the bottom of the viewport rather than sitting
+   in normal flow at the end of a possibly-long page -- sticky, not fixed,
+   so it needs no manual space reservation from the content above it. This
+   is what keeps it above a mobile keyboard: the sticky containing block
+   recalculates against the shrunk visual viewport when the keyboard opens,
+   the same mechanism behind every native chat app's input bar. Flagging
+   that this is the correct mechanism, not a verified-on-device result --
+   no way to test actual keyboard behaviour in this environment. */
 .chat-input-row {
   max-width: 680px !important;
   margin-left: auto;
   margin-right: auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
+  background: #16171d;
+  padding-bottom: 1rem;
 }
 
 .rec-rows,

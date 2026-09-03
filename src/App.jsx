@@ -860,50 +860,55 @@ export default function App() {
 
                 {loading && <p style={{ opacity: 0.6 }}>{loadingMessage}</p>}
 
-                <div
-                  className="chat-input-row"
-                  style={{ marginTop: '1.5rem', display: 'flex', gap: '8px', alignItems: 'flex-end' }}
-                >
-                  <textarea
-                    ref={inputRef}
-                    value={input}
-                    rows={1}
-                    onChange={(e) => {
-                      setInput(e.target.value);
-                      // Auto-grow: reset to 'auto' first so the box can SHRINK
-                      // when text is deleted, not only expand.
-                      const el = e.target;
-                      el.style.height = 'auto';
-                      el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-                    }}
-                    onKeyDown={(e) => {
-                      // Enter sends. Shift+Enter inserts a newline, matching
-                      // the convention every chat app already uses, and only
-                      // possible with a textarea in the first place.
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSend();
-                        if (inputRef.current) inputRef.current.style.height = 'auto';
-                      }
-                    }}
-                    placeholder={isStreaming ? 'Groove is replying...' : 'Type a message...'}
-                    disabled={isStreaming}
-                    className="chat-input"
-                    style={{
-                      opacity: isStreaming ? 0.6 : 1,
-                      cursor: isStreaming ? 'not-allowed' : 'text',
-                    }}
-                  />
-                  <button
-                    onClick={handleSend}
-                    disabled={isStreaming || !input.trim()}
-                    style={{
-                      opacity: isStreaming || !input.trim() ? 0.5 : 1,
-                      cursor: isStreaming || !input.trim() ? 'not-allowed' : 'pointer',
-                    }}
-                  >
-                    Send
-                  </button>
+                <div className="chat-input-row" style={{ marginTop: '1.5rem' }}>
+                  <div className="chat-input-wrap">
+                    <textarea
+                      ref={inputRef}
+                      value={input}
+                      rows={1}
+                      onChange={(e) => {
+                        setInput(e.target.value);
+                        // Auto-grow: reset to 'auto' first so the box can SHRINK
+                        // when text is deleted, not only expand.
+                        const el = e.target;
+                        el.style.height = 'auto';
+                        el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+                      }}
+                      onKeyDown={(e) => {
+                        // Enter sends. Shift+Enter inserts a newline, matching
+                        // the convention every chat app already uses, and only
+                        // possible with a textarea in the first place.
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSend();
+                          if (inputRef.current) inputRef.current.style.height = 'auto';
+                        }
+                      }}
+                      placeholder={isStreaming ? 'Groove is replying...' : 'Type a message...'}
+                      disabled={isStreaming}
+                      className="chat-input"
+                      style={{
+                        opacity: isStreaming ? 0.6 : 1,
+                        cursor: isStreaming ? 'not-allowed' : 'text',
+                      }}
+                    />
+                    {/* Brief M, P0-6. Inside the field, right side, vertically
+                        centred -- the messaging-app convention, and it
+                        recovers width the separate button was costing on a
+                        phone. */}
+                    <button
+                      type="button"
+                      onClick={handleSend}
+                      disabled={isStreaming || !input.trim()}
+                      className="chat-send-btn"
+                      aria-label="Send message"
+                      title="Send"
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+                        <path d="M12 19V5M12 5l-6 6M12 5l6 6" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               </div>
           </div>
