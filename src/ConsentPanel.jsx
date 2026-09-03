@@ -24,6 +24,15 @@
 // DECLINE IS REAL, not cosmetic. hasDeclinedConsent() is checked by emit()
 // in App.jsx and short-circuits BEFORE logEvent is ever called — declining
 // stops logging outright, it does not just dismiss this card. PRD v4.0 §9.
+//
+// Brief N, N-4. App.jsx now holds Groove's opener sequence until this
+// panel is dismissed, so a first-time visitor doesn't read the notice
+// while the opener plays out unseen behind it. onMount exists so App.jsx
+// can tell "the panel rendered and is just open" apart from "the panel
+// never rendered at all" -- only the second is a failure the opener needs
+// a guard against; the first is this component working correctly.
+
+import { useEffect } from 'react';
 
 const SEEN_KEY = 'riff_radar_consent_seen';
 const DECLINED_KEY = 'riff_radar_consent_declined';
@@ -48,7 +57,11 @@ function markConsentDeclined() {
 // moment specifically. hasDeclinedConsent() lives in localStorage, and
 // emit() in App.jsx reads it fresh on every call -- the flag itself IS the
 // wiring, not a React state value threaded back up.
-export default function ConsentPanel({ open, onClose }) {
+export default function ConsentPanel({ open, onClose, onMount }) {
+  useEffect(() => {
+    onMount?.();
+  }, []);
+
   function handleAccept() {
     markConsentSeen();
     onClose();

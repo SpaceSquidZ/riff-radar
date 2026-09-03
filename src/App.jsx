@@ -47,11 +47,31 @@ function getRandomLoadingMessage() {
 export default function App() {
   // D-031 (rebuilt 2026-08-31 -- the July 2026 "closed" version still gated
   // the opener behind consent; see the Decision Log status note on D-031).
-  // No landing phase, no form phase, no gate before the conversation: Groove's
-  // opener starts on mount (see the effect below) regardless of consentOpen.
-  // The consent panel is a collapsible right-edge drawer (ConsentPanel.jsx),
-  // open by default until read, never blocking anything else.
+  // No landing phase, no form phase, no gate before the conversation. The
+  // consent panel is a right-edge drawer (ConsentPanel.jsx), open by
+  // default until read.
+  //
+  // Brief N, N-4: the opener SEQUENCE is now held until this is dismissed
+  // (see the effects below) -- Jackie's call, and distinct from D-031's
+  // gate. D-031 forbade blocking access to the conversation behind a
+  // click; this doesn't block anything, it only sequences a presentation
+  // the visitor cannot see anyway while the panel covers it. Without this,
+  // a first-time visitor read a privacy notice while Groove's opener
+  // played out unseen behind it.
   const [consentOpen, setConsentOpen] = useState(!hasSeenConsent());
+  // Deliberately separate from consentOpen, which purely controls the
+  // panel's own visibility. openerCanStart is what actually gates the
+  // opener effect below. Splitting them matters for the mount-failure
+  // guard a few lines down: it needs to unblock the opener if the panel
+  // ever fails to RENDER, but it must never visually yank a panel a
+  // genuinely slow reader still has open out from under them -- sharing
+  // one flag for both would risk auto-closing their panel with no consent
+  // decision recorded.
+  const [openerCanStart, setOpenerCanStart] = useState(hasSeenConsent());
+  // Set from ConsentPanel's own onMount, below. Lets the render-failure
+  // guard distinguish "the panel never mounted" from "it mounted and is
+  // just open," which a flat timer alone cannot do.
+  const consentPanelMountedRef = useRef(false);
 
   // Roadmap v2 Wave 2 item 8 / Milestone 1 DoD: conversation persistence
   // across refresh (see conversationPersistence.js). Read once, lazily, on
@@ -195,17 +215,36 @@ export default function App() {
     });
   }, []);
 
-  // D-031, AC-1: the opener starts on mount, unconditionally. It used to wait
-  // for the consent notice to be dismissed (`if (showConsent) return`) --
-  // that was itself a fix for a real bug (bubbles scheduled on mount while a
-  // full-width bottom bar covered them, so the user saw four bubbles sitting
-  // there at once instead of staged) but the fix was gating, which is exactly
-  // what AC-1 forbids. The right cure for the old bug is what actually
-  // shipped here: a narrow edge drawer that does not cover the chat column on
-  // desktop. It CAN still cover most of a narrow mobile viewport while open
-  // (88vw) -- if that reproduces the old symptom there, that is a rendering
-  // overlap to solve in ConsentPanel/CSS, not a reason to gate this again.
+  // Brief N, N-4 guard: if the consent panel is ever absent or fails to
+  // RENDER, the opener must still start eventually rather than staying
+  // blocked forever. Deliberately checks whether ConsentPanel.jsx actually
+  // mounted (via consentPanelMountedRef, set from its own onMount below),
+  // not a flat timer -- a flat timer can't distinguish "the panel never
+  // rendered" from "a real visitor is genuinely still reading it," and
+  // firing for the second case would defeat N-4's whole point (starting
+  // the sequence invisibly behind a still-open panel) for exactly the
+  // readers most engaged with the notice. 2s is far longer than this
+  // simple a component takes to mount and far shorter than any plausible
+  // reading time, so this can only fire on genuine render failure.
   useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!consentPanelMountedRef.current) setOpenerCanStart(true);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // D-031, AC-1 still holds: no landing phase, no form phase, nothing
+  // blocks ACCESS to the conversation behind a click. What changed (Brief
+  // N, N-4) is that the opener SEQUENCE now waits for openerCanStart
+  // before it stages anything -- not a re-gate, since nothing is
+  // withheld: the sequence plays out unseen behind the panel otherwise,
+  // and by the time a first-time visitor dismisses it, was already over.
+  // openerCanStart starts true already for a returning visitor who
+  // consented on a prior visit (hasSeenConsent() true) -- no wait at all
+  // in that case, matching the brief exactly ("or immediately if consent
+  // was already recorded on a previous visit").
+  useEffect(() => {
+    if (!openerCanStart) return;
     if (openerStartedRef.current) return;
     if (!sessionInfoRef.current) return;
     openerStartedRef.current = true;
@@ -292,7 +331,7 @@ export default function App() {
       timers.forEach(clearTimeout);
       setAcquiring(false);
     };
-  }, []);
+  }, [openerCanStart]);
 
   useEffect(() => {
     writeCrate(crate);
@@ -966,7 +1005,17 @@ export default function App() {
 
       <ConsentPanel
         open={consentOpen}
-        onClose={() => setConsentOpen(false)}
+        onMount={() => {
+          consentPanelMountedRef.current = true;
+        }}
+        onClose={() => {
+          setConsentOpen(false);
+          // Brief N, N-4: a genuine dismissal (Accept, Decline, the close
+          // button, or the scrim -- ConsentPanel.jsx calls onClose for all
+          // four) unblocks the opener immediately, same tick as the panel
+          // closing. No need to wait on the mount-failure guard above.
+          setOpenerCanStart(true);
+        }}
       />
     </>
   );
