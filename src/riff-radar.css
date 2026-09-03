@@ -559,10 +559,56 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
     flex-wrap: wrap;
   }
 
+  /* Brief K3a. Auto-width content left-packed in a full-width row left a
+     visible gap on the right that read as a missing fourth control. Grid
+     columns give the row a deliberate width instead. Preview gets the wide
+     column because it's the primary action -- placed explicitly by
+     grid-column rather than by DOM reorder, since Save actually renders
+     before Play in markup. */
   .rec-row-actions {
     width: 100%;
-    justify-content: flex-start;
+    display: grid;
+    grid-template-columns: 1.4fr 1fr 1fr;
+    gap: 8px;
     padding-left: 68px; /* line up under the text, past the artwork */
+  }
+
+  .rec-row-play {
+    grid-column: 1;
+  }
+
+  .rec-row-save {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .rec-row-links {
+    grid-column: 3;
+    justify-self: start;
+  }
+
+  /* Hunt cards have no Preview column -- their three actual destinations
+     (Spotify/Bandcamp/YouTube) are the equal columns instead ("their three
+     destinations are equals", K3a), not .rec-row-actions's direct children
+     (which are just Save + one links group here, not three things). */
+  .rec-row-hunt .rec-row-actions {
+    grid-template-columns: auto 1fr;
+  }
+
+  .rec-row-hunt .rec-row-save {
+    grid-column: 1;
+  }
+
+  .rec-row-hunt .rec-row-links {
+    grid-column: 2;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    justify-self: stretch;
+  }
+
+  .rec-row-hunt .rec-row-links .rec-icon-link {
+    width: 100%;
   }
 
   .rec-novelty-row {
