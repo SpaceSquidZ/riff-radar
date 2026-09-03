@@ -757,14 +757,21 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   font-weight: 600;
   margin: 0;
   color: #f0f0f2;
-  overflow-wrap: anywhere;
+  /* Brief M, P0-7. overflow-wrap: anywhere breaks ordinary words
+     ("Sleepi/ng") whenever the layout algorithm decides it's needed, not
+     only when a genuinely unbroken string would overflow. break-word is
+     the fallback-only version: normal wrapping first, mid-word only as a
+     last resort for something that can't wrap any other way. */
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .opener-record-artist {
   font-size: 13px;
   color: #a4a7b3;
   margin: 1px 0 0 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .opener-record-meta {
