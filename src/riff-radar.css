@@ -559,58 +559,43 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
     flex-wrap: wrap;
   }
 
-  /* Brief K3a. Auto-width content left-packed in a full-width row left a
-     visible gap on the right that read as a missing fourth control. Grid
-     columns give the row a deliberate width instead. Preview gets the wide
-     column because it's the primary action -- placed explicitly by
-     grid-column rather than by DOM reorder, since Save actually renders
-     before Play in markup. */
+  /* Brief N, N-1. Was a 3-column fr grid (Brief K3a). Two failures: sparse
+     auto-placement pushed .rec-row-play to a second row because
+     .rec-row-save appears first in the DOM but claims column 2; and
+     padding-left: 68px squeezed the third column narrower than its own
+     contents, so Spotify overflowed the card. Flex with natural widths
+     cannot overflow and does not care about DOM order. */
   .rec-row-actions {
     width: 100%;
-    display: grid;
-    grid-template-columns: 1.4fr 1fr 1fr;
-    gap: 8px;
-    padding-left: 68px; /* line up under the text, past the artwork */
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-left: 0;
+    min-width: 0;
   }
+  .rec-row-play  { order: 1; }
+  .rec-row-save  { order: 2; }
+  .rec-row-links { order: 3; margin-left: auto; }
 
-  .rec-row-play {
-    grid-column: 1;
-  }
-
-  .rec-row-save {
-    grid-column: 2;
-    justify-self: start;
-  }
-
-  .rec-row-links {
-    grid-column: 3;
-    justify-self: start;
-  }
-
-  /* Hunt cards have no Preview column -- their three actual destinations
-     (Spotify/Bandcamp/YouTube) are the equal columns instead ("their three
-     destinations are equals", K3a), not .rec-row-actions's direct children
-     (which are just Save + one links group here, not three things). */
-  .rec-row-hunt .rec-row-actions {
-    grid-template-columns: auto 1fr;
-  }
-
-  .rec-row-hunt .rec-row-save {
-    grid-column: 1;
-  }
-
+  /* Hunt cards: same container, but no preview, and their three
+     destinations are equals. */
   .rec-row-hunt .rec-row-links {
-    grid-column: 2;
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 10px;
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 8px;
-    justify-self: stretch;
   }
 
   .rec-row-hunt .rec-row-links .rec-icon-link {
     width: 100%;
   }
 
+  /* N-1 leaves .rec-row-actions's padding-left at 0, but this alignment
+     reference to the OLD 68px value is now stale -- flagged, not silently
+     changed, since N-1 didn't ask for it and .rec-novelty-row sits below
+     .rec-row-actions, not inside it. */
   .rec-novelty-row {
     margin-left: 68px; /* same alignment as .rec-row-actions above */
   }
