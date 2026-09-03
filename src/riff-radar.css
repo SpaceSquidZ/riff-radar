@@ -1522,13 +1522,19 @@ body {
 }
 
 /* DISTANT is a tag, not a type (D-022): far in language, geography, or era,
-   but still carrying a real connection underneath. Styled as a lighter,
-   outlined stamp so it reads as a modifier on the connection type rather than
-   competing with it. */
+   but still carrying a real connection underneath.
+   Brief N, N-3: the outlined-stamp treatment was still a full pill at the
+   same size as the connection-type pill next to it, so SAME TRICK and FAR
+   SIGNAL read as two types, and the outline distinction disappeared on a
+   phone. No border, no box, smaller -- an annotation on the pill beside it
+   rather than a peer. */
 .rec-pill-distant {
   background: transparent;
-  color: #4a453b;
-  border: 1px solid #a9a294;
+  border: none;
+  color: #6f6a5c;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  padding: 3px 0 3px 2px;
 }
 
 /* ===========================================================================
