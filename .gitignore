@@ -33,3 +33,13 @@ validate_opener_pairs.py
 lastfm_spike_results.json
 scripts/lastfm_spike.py
 replay-out/
+
+# Apple Music badge asset drop (320MB, 97 files: SVG/PNG/EPS × 4 badge
+# categories × Badge/Lockup variants). Only one SVG from this set will ever
+# ship, copied into public/. The source folder itself must never enter git
+# history. Kept even after the folder moves out of the repo, as a guard
+# against a future drop landing in the same path.
+USGB-EN/
+
+# Working material, not source -- should never end up in history.
+Claude outputs/
