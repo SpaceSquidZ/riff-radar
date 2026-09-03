@@ -23,7 +23,7 @@ import {
   clearPendingAsk,
   agePendingAsk,
 } from './loreProgress';
-import { FIRST_CONTACT, ACQUIRE_MS, FIRST_ACQUIRE_MS, pickReturnGreeting } from './grooveOpeners';
+import { FIRST_CONTACT, ACQUIRE_MS, pickReturnGreeting } from './grooveOpeners';
 import { pickOpenerPair } from './openerPairs';
 import { crateKey, readCrate, writeCrate, toCrateItem } from './crate';
 import { saveConversation, loadConversation } from './conversationPersistence';
@@ -93,11 +93,14 @@ export default function App() {
   // acquisition, not as a typing indicator: the design note is that a loading
   // state should be answerable to "what part of the apparatus is this."
   const [acquiring, setAcquiring] = useState(false);
-  // Brief K, 3b. Which status line the current acquisition gap carries, if
-  // any -- the last gap before the opener records is deliberately quiet
-  // (null), and every non-opener use of the acquiring indicator (e.g.
-  // return-visit greetings) also leaves this null, unchanged from before.
-  const [acquiringLabel, setAcquiringLabel] = useState(null);
+  // Brief M, P0-3, reverting Brief K 3b. Status text used to be carried
+  // inline by the acquisition indicator, interleaved between bubbles -- it
+  // wrapped mid-phrase, sat at low contrast, and collided with the
+  // wordmark on first load. Replaced by a discrete sequence rendered once,
+  // before any bubble, that stays on screen once complete (see
+  // openerStatusLines below). The acquiring indicator itself goes back to
+  // being label-less everywhere, first contact included.
+  const [openerStatusLines, setOpenerStatusLines] = useState([]);
 
   // The crate. Session-scoped on purpose: it survives a refresh but not a new
   // day, which is what it is. Cross-session persistence needs accounts.
@@ -226,7 +229,6 @@ export default function App() {
 
     function pushBubble(id, text, withRecords) {
       setAcquiring(false);
-      setAcquiringLabel(null);
       setMessages((prev) => [
         ...prev,
         {
@@ -243,17 +245,10 @@ export default function App() {
 
     /**
      * Shows acquisition at `at`, resolves the bubble `acquireMs` later
-     * (defaults to ACQUIRE_MS). `label`, if given, is the status text the
-     * acquisition indicator carries for this gap (Brief K, 3b) -- omit it
-     * for a quiet gap, e.g. the one right before the opener records.
+     * (defaults to ACQUIRE_MS).
      */
-    function schedule(at, id, text, withRecords, acquireMs = ACQUIRE_MS, label = null) {
-      timers.push(
-        setTimeout(() => {
-          setAcquiring(true);
-          setAcquiringLabel(label);
-        }, at)
-      );
+    function schedule(at, id, text, withRecords, acquireMs = ACQUIRE_MS) {
+      timers.push(setTimeout(() => setAcquiring(true), at));
       timers.push(
         setTimeout(() => pushBubble(id, text, withRecords), at + acquireMs)
       );
@@ -261,17 +256,28 @@ export default function App() {
     }
 
     if (!isReturning) {
-      let cursor = 0;
+      // Brief M, P0-3. A discrete sequence, staged before any bubble, that
+      // stays on screen once complete rather than being carried inline by
+      // the acquisition indicator (Brief K 3b, reverted -- it wrapped
+      // mid-phrase and collided with the wordmark on first load). Sourced
+      // from FIRST_CONTACT's own statusLabel fields so the three lines
+      // have one home, not two. STATUS_LINE_MS matches K3b's own finding
+      // that 600ms isn't long enough to read a two-word line.
+      const STATUS_LINE_MS = 900;
+      const statusLines = FIRST_CONTACT.map((b) => b.statusLabel).filter(Boolean);
+      statusLines.forEach((line, i) => {
+        timers.push(
+          setTimeout(() => {
+            setOpenerStatusLines((prev) => [...prev, line]);
+          }, i * STATUS_LINE_MS)
+        );
+      });
+      // Brief settle after the last line before Groove's own bubble timing
+      // picks up beneath the sequence.
+      let cursor = statusLines.length * STATUS_LINE_MS + 400;
       FIRST_CONTACT.forEach((bubble, i) => {
         cursor += bubble.delayMs;
-        cursor = schedule(
-          cursor,
-          `opener-${i}`,
-          bubble.text,
-          !!bubble.showRecords,
-          i === 0 ? FIRST_ACQUIRE_MS : ACQUIRE_MS,
-          bubble.statusLabel || null
-        );
+        cursor = schedule(cursor, `opener-${i}`, bubble.text, !!bubble.showRecords);
       });
     } else {
       // The first-contact script only works once. Replaying it would have
@@ -687,6 +693,18 @@ export default function App() {
                 `phase === 'chat'` gate (phase never left its initial value,
                 setPhase had no callers) is removed, not just satisfied. */}
               <div>
+                {/* Brief M, P0-3. Discrete pre-bubble sequence, first contact
+                    only (openerStatusLines only ever gets populated in the
+                    !isReturning branch). Renders once, above the whole log,
+                    and is never cleared -- it stays on screen as Groove's
+                    bubbles accumulate beneath it. */}
+                {openerStatusLines.length > 0 && (
+                  <div className="opener-status-sequence" role="status">
+                    {openerStatusLines.map((line, i) => (
+                      <p key={i} className="opener-status-line">{line}</p>
+                    ))}
+                  </div>
+                )}
                 {messages.map((msg, i) => {
                   // Hide an assistant turn only when it carries NOTHING at all.
                   //
@@ -833,15 +851,8 @@ export default function App() {
                       </svg>
                     </div>
                     <div className="chat-content">
-                      <div
-                        className="signal-acquiring"
-                        role="status"
-                        aria-label={acquiringLabel || 'Incoming transmission'}
-                      >
+                      <div className="signal-acquiring" role="status" aria-label="Incoming transmission">
                         <span /><span /><span /><span /><span /><span />
-                        {acquiringLabel && (
-                          <span className="signal-acquiring-label">{acquiringLabel}</span>
-                        )}
                       </div>
                     </div>
                   </div>

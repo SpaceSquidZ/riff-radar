@@ -33,19 +33,13 @@
 // pause is not a spinner, it is the channel pulling something in.
 export const ACQUIRE_MS = 600;
 
-// Brief K, 3b (rebuilt against the real timeline, not an assumed dead-screen
-// gap -- there isn't one; see the K3b correction). The first acquisition
-// slot only, extended so "receiver aligned" is actually readable: two words
-// at 600ms is not long enough. Every other gap keeps ACQUIRE_MS unchanged,
-// so this adds ~300ms total to the whole sequence, not 300ms per gap.
-export const FIRST_ACQUIRE_MS = 900;
-
 export const FIRST_CONTACT = [
   {
     delayMs: 0,
-    // Brief K 3b: status text carried by the EXISTING acquisition indicator
-    // for this gap, not a new sequence in front of the opener. Uses
-    // FIRST_ACQUIRE_MS above, not ACQUIRE_MS.
+    // Brief M, P0-3 (reverting Brief K 3b). statusLabel is no longer
+    // carried by the acquisition indicator -- App.jsx reads these three
+    // fields to build a discrete sequence shown once, before any bubble,
+    // that stays on screen rather than being tied to a per-bubble gap.
     statusLabel: 'receiver aligned',
     text: `Oh. You're not a recording. I keep checking. Humans usually aren't, this far out, but the habit's still there.
 
@@ -68,9 +62,9 @@ Sorry. I don't mean to make that your problem. Everything that reaches me has al
     text: `Sorry. I was waiting to see if you'd speak first. You weren't going to. Right. My turn.`,
   },
   {
-    // Records render with this bubble. Deliberately NO statusLabel: the
-    // sequence goes quiet in this last gap so the records arrive into
-    // silence rather than competing with a status line.
+    // Records render with this bubble. Deliberately no statusLabel: the
+    // discrete sequence is a fixed three lines, not one per bubble, and
+    // this is the fourth bubble.
     delayMs: 800,
     showRecords: true,
     text: `These are just what I had on. I wasn't expecting anyone, so it isn't curated for you, it's what was playing when whatever this is happened.

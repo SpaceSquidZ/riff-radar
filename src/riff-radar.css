@@ -831,16 +831,26 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   }
 }
 
-/* Brief K, 3b: status text carried by the existing acquisition indicator
-   (see grooveOpeners.js's statusLabel field) rather than a new sequence in
-   front of the opener. Monospace label register, matching the K1 novelty
-   control's "Heard this before?" row. */
-.signal-acquiring-label {
+/* Brief M, P0-3, reverting Brief K 3b. The interleaved treatment collided
+   with the wordmark on first load, wrapped mid-phrase, and sat at low
+   contrast beside the acquiring indicator. A discrete sequence instead:
+   three lines, staged, sitting above the whole chat log, left on screen
+   once complete rather than tied to any one bubble's acquiring state.
+   Monospace label register, matching the K1 novelty control's "Heard this
+   before?" row. */
+.opener-status-sequence {
+  margin: 0 0 14px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.opener-status-line {
+  margin: 0;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 11px;
   letter-spacing: 0.04em;
   color: #9a9daa;
-  margin-left: 6px;
   animation: signal-label-in 0.4s ease both;
 }
 
@@ -849,9 +859,9 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   to   { opacity: 1; }
 }
 
-/* Reduced-motion viewers see the text without the fade-in transition. */
+/* Reduced-motion viewers see each line without the fade-in transition. */
 @media (prefers-reduced-motion: reduce) {
-  .signal-acquiring-label {
+  .opener-status-line {
     animation: none;
   }
 }
@@ -1156,7 +1166,7 @@ body {
    Shared by RecommendationCard and HuntCard. Sits below the paper-label
    card, on the dark room background, not inside it -- "a slim row below
    the action row, separated from it, not competing with Preview for
-   attention." Monospace label register, same as .signal-acquiring-label:
+   attention." Monospace label register, same as .opener-status-line:
    this is instrumentation reading, not conversation. */
 .rec-card {
   display: flex;
