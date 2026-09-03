@@ -615,6 +615,18 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
     margin-left: 68px; /* same alignment as .rec-row-actions above */
   }
 
+  /* Brief M, P0-2. The clamp hid the exact sentence D-022 exists to
+     deliver, on the only screen most testers touch. No truncation, no
+     Read more toggle on mobile -- isOverflowing (RecommendationCard.jsx)
+     is computed from actual DOM overflow, so removing the clamp here also
+     stops the button from rendering at all, with no JS change needed.
+     Desktop keeps the clamp; this is a mobile-only reversal. */
+  .rec-row-explanation {
+    display: block;
+    -webkit-line-clamp: unset;
+    overflow: visible;
+  }
+
   .chat-bubble {
     max-width: 100%;
   }
