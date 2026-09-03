@@ -812,6 +812,29 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   .opener-records {
     max-width: 100%;
   }
+
+  /* Brief N, N-2. .rec-row got flex-wrap on mobile and .opener-record never
+     did, so the opener stayed a rigid 3-column row: 48px art, a body
+     squeezed to ~68px, and four non-shrinking buttons. That width is why
+     break-word (Brief M, P0-7) still broke ordinary words -- at 68px they
+     legitimately do not fit. Deliberately NOT merged with .rec-row's own
+     mobile rules: D-025 keeps these components separate on purpose, they
+     only share layout behaviour now, not identity. */
+  .opener-record {
+    flex-wrap: wrap;
+  }
+  .opener-record-body {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .opener-record-actions {
+    width: 100%;
+    margin-top: 8px;
+    gap: 10px;
+  }
+  .opener-record-actions .opener-record-link:last-child {
+    margin-left: auto;
+  }
 }
 
 /* --- Signal acquisition ---
