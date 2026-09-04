@@ -371,6 +371,44 @@ MusicBrainz returned the correct entity on the first query, with "Mariya Takeuch
 **Rationale:** A candidate that hit a transient iTunes network failure was passing the shippability check and surfacing as a normal card with no artwork, no preview and no Apple Music link — visibly broken rather than excluded, falling through the gap between the ordinary path and the hunt path. Found by a test written for D-037 against a pre-existing defect.
 **Gave up:** nothing. This was a bug.
 
+### D-045 · Pool-seeding signals must be corroborated against user-authored text — **CLOSED**
+**Decided:** 04 Sep 2026
+
+The model's JSON metadata block has no content-attribution boundary. `inputTrack` is filled
+with whatever artist the model was thinking about, including artists Groove named about his
+own listening. Reproduced 3/3 on "what have you got queued up"-shaped messages, with a
+different artist each run.
+
+**Impact, live on deployed code and not hypothetical:** `verifiedInputTrack?.artist` — the
+second link of the `orbitArtist` chain — seeded the Last.fm pool from Groove's own picks.
+Because the fabricated artists are real and resolvable, the result was a fully populated,
+confident pool built from a conversation the user never had, indistinguishable downstream
+from a legitimate seed by any signal we log.
+
+**Decision:** any signal used to seed the recommendation pool must be corroborated against
+text the user actually wrote in this conversation. Artist string or track string,
+case-insensitive, word-boundary, minimum three characters, user turns only — never assistant
+turns, which is the mechanism that makes it work. Corroboration failure means no seed; it is
+never an error.
+
+**Scope:** gates seeding only. `inputTrack` is still sent to the client unchanged for the
+correction-affordance UI.
+
+**Not the containment rule.** The earlier string-similarity rule died because it tried to
+*find* an artist by fuzzy-matching a romanized name against a foreign-script record — an
+unbounded problem with no correct tuning. This corroborates a candidate already in hand
+against the user's own words. Exact, bounded, fail-closed.
+
+**Rejected for now:** a prompt-side fix teaching the model to distinguish "an artist I
+mentioned" from "an artist you mentioned." That is a schema change — the structured output
+has no field meaning "an artist the user named" — and it is a design decision, not a
+pre-freeze one. Deferred.
+
+**Known false negative, instrumented rather than solved:** a user who writes an artist in a
+script or romanization different from what the model reports will fail corroboration and
+lose the seed. Cost is an unseeded turn, which is the status quo. Rejection logging added so
+UAT traffic measures the rate.
+
 ---
 
 ## Maintenance note

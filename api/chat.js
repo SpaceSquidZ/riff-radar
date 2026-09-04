@@ -135,6 +135,7 @@ function extractStructuredData(replyText) {
     askOffered: false,
     askAnswered: false,
     inputTrack: null,
+    rawInputArtist: null,
     requestedArtists: [],
     recsFailureReason: null,
     cleanedReply: replyText,
@@ -230,6 +231,14 @@ function extractStructuredData(replyText) {
       parsed.inputTrack?.track && parsed.inputTrack?.artist
         ? { track: parsed.inputTrack.track, artist: parsed.inputTrack.artist }
         : null,
+    // 2026-09-03, the seeding chain's third link: inputTrack above is null
+    // the moment track is missing, which throws away artist even on a turn
+    // where the user named one with no song attached ("I've been on a MIKE
+    // kick"). This carries the raw, unfiltered self-report through
+    // separately so that case isn't lost -- gated by corroboration at its
+    // one use site (nextOrbitArtist), same as inputTrack's own artist is.
+    rawInputArtist:
+      typeof parsed.inputTrack?.artist === 'string' ? parsed.inputTrack.artist : null,
     // Change 2 (Brief A, rule 5): artists the user named by name this turn,
     // exempting them from the no-repeat check in selectSurfaced. Filtered to
     // strings so a malformed value never reaches normalizeArtistKey downstream.
@@ -928,6 +937,29 @@ function corroboratedByUser(candidate, userText) {
   return pattern.test(userText);
 }
 
+// Shared by both self-reported links in the seeding chain: verifiedInputTrack
+// (link 2, a track that was actually looked up) and the bare-artist fallback
+// (link 3, 2026-09-03 -- an artist named with no track attached, e.g. "I've
+// been on a MIKE kick," which used to be lost entirely, since
+// verifiedInputTrack is only ever built when a title exists). track is
+// always null on link 3's path, which collapses this to an artist-only
+// check there with no special-casing needed.
+//
+// Logs on rejection so UAT traffic measures the gate's false-negative rate:
+// a real artist named in a different script or romanization than the model
+// reports will fail this exact check, and this is the only way to count how
+// often that happens outside a hand-built test.
+function corroboratedSeedArtist(artist, track, userText) {
+  if (!artist) return null;
+  if (corroboratedByUser(artist, userText) || (track && corroboratedByUser(track, userText))) {
+    return artist;
+  }
+  console.log(
+    `[seed] inputTrack not corroborated: "${artist}" (track=${track ? 'populated' : 'empty'})`
+  );
+  return null;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -1133,6 +1165,7 @@ export default async function handler(req, res) {
       askOffered,
       askAnswered,
       inputTrack,
+      rawInputArtist,
       requestedArtists,
       recsFailureReason,
     } = extracted;
@@ -1608,14 +1641,23 @@ export default async function handler(req, res) {
     // does not error the turn -- it just means this link contributes
     // nothing, same as if verifiedInputTrack had never been built.
     const userText = collectUserAuthoredText(messages);
-    const corroboratedInputArtist =
-      verifiedInputTrack &&
-      (corroboratedByUser(verifiedInputTrack.artist, userText) ||
-        corroboratedByUser(verifiedInputTrack.track, userText))
-        ? verifiedInputTrack.artist
-        : null;
+    const corroboratedVerifiedArtist = verifiedInputTrack
+      ? corroboratedSeedArtist(verifiedInputTrack.artist, verifiedInputTrack.track, userText)
+      : null;
+    // Third link, same day: rawInputArtist covers the bare-artist-no-track
+    // case verifiedInputTrack can never reach (see rawInputArtist's own
+    // comment at its extraction site). Only evaluated when verifiedInputTrack
+    // is null -- when it exists, rawInputArtist is the same string already
+    // handled (accepted or rejected) by the line above, and re-checking it
+    // would double-log one rejection under both links instead of one.
+    const corroboratedRawArtist = verifiedInputTrack
+      ? null
+      : corroboratedSeedArtist(rawInputArtist, null, userText);
     const nextOrbitArtist =
-      requestedArtists[requestedArtists.length - 1] || corroboratedInputArtist || orbitArtist;
+      requestedArtists[requestedArtists.length - 1] ||
+      corroboratedVerifiedArtist ||
+      corroboratedRawArtist ||
+      orbitArtist;
 
     // The client persists progress from these fields. An ask id is only sent
     // when Groove CONFIRMS he asked it, not merely because the server put it in
