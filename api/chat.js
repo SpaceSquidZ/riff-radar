@@ -888,6 +888,46 @@ function logEventSafe(sessionId, eventType, payload, isTester = false) {
   }
 }
 
+// BUG THIS FIXES (found live, 2026-09-03): inputTrack is Groove's own
+// self-report of what the user named, written into the SAME metadata field
+// regardless of whether the artist he's describing is the user's or his own.
+// "What's something interesting you've got queued up?" got him narrating a
+// record from his own rotation -- Arthur Russell's "Answers Me," confirmed
+// real by lookupTrackFacts, at confidence: "confirmed" -- and inputTrack
+// carried it exactly as if the user had said it. verifiedInputTrack's own
+// construction is untouched (it still needs to mean "a track we actually
+// looked up" for the [source]/[input] confirmation lines), so this gates
+// USE of it as a pool-seeding signal, checked at the one call site that
+// treats it as if the user said it.
+//
+// Corroboration, not verification: the model's own text can never prove the
+// USER said something, only that a real catalogue entry exists. Grep the
+// user's own turns for the artist or track string instead -- Groove's
+// fabrications live exclusively in HIS text, never in what the user typed,
+// so this is exactly the signal that distinguishes a real confirmation from
+// a well-produced piece of narration that happens to name something real.
+function collectUserAuthoredText(messages) {
+  return (messages || [])
+    .filter((m) => m.role === 'user')
+    .map((m) => m.content || '')
+    .join('\n');
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Minimum length guards against a short name (e.g. "Ka") matching some
+// unrelated three-letter fragment inside a long user message by accident --
+// \b alone isn't enough insurance at that length. Word-boundary matched so
+// "Ka" doesn't match inside "Kate," and case-insensitive since the user's
+// own capitalization is not a signal about anything.
+function corroboratedByUser(candidate, userText) {
+  if (!candidate || candidate.length < 3 || !userText) return false;
+  const pattern = new RegExp(`\\b${escapeRegExp(candidate)}\\b`, 'i');
+  return pattern.test(userText);
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -1558,8 +1598,24 @@ export default async function handler(req, res) {
     // turn, orbitArtist carries forward unchanged rather than resetting to
     // null — silence this turn does not mean the user stopped orbiting
     // whatever they last named.
+    //
+    // BUG THIS FIXES (2026-09-03): verifiedInputTrack can be built from a
+    // track Groove described about HIMSELF, not the user -- see
+    // collectUserAuthoredText's comment above. A confirmed, real catalogue
+    // match is not evidence the USER said it, so this link is only trusted
+    // when the artist or track string it's built from is corroborated in
+    // text the user actually wrote this conversation. Failing corroboration
+    // does not error the turn -- it just means this link contributes
+    // nothing, same as if verifiedInputTrack had never been built.
+    const userText = collectUserAuthoredText(messages);
+    const corroboratedInputArtist =
+      verifiedInputTrack &&
+      (corroboratedByUser(verifiedInputTrack.artist, userText) ||
+        corroboratedByUser(verifiedInputTrack.track, userText))
+        ? verifiedInputTrack.artist
+        : null;
     const nextOrbitArtist =
-      requestedArtists[requestedArtists.length - 1] || verifiedInputTrack?.artist || orbitArtist;
+      requestedArtists[requestedArtists.length - 1] || corroboratedInputArtist || orbitArtist;
 
     // The client persists progress from these fields. An ask id is only sent
     // when Groove CONFIRMS he asked it, not merely because the server put it in
