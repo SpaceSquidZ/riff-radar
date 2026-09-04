@@ -1026,7 +1026,11 @@ export default async function handler(req, res) {
     // Fails open by design: null pool means Groove generates from memory
     // exactly as before. Never let an optimisation break a reply.
     let candidatePool = null;
-    const seedArtist = resolveSeedArtist(orbitArtist, previousRecommendations);
+    // previousRecommendations no longer feeds this (2026-09-03 fix, see
+    // resolveSeedArtist's own comment in lastfm.js): that fallback could
+    // seed the pool from Groove's own prior pick, which compounds off-topic
+    // across turns rather than degrading gracefully like an unseeded pool.
+    const seedArtist = resolveSeedArtist(orbitArtist);
     if (seedArtist) {
       try {
         candidatePool = await getCandidatePool(seedArtist);

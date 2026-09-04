@@ -498,14 +498,24 @@ export async function getCandidatePool(artistName) {
  * turn's own text. That lag is expected and acceptable; the bug was
  * permanent stickiness past it, not the lag itself.
  *
- * previousRecommendations is the fallback ONLY for a turn where nothing has
- * ever been named at all (e.g. session opens on "surprise me").
+ * BUG THIS FIXES (found via a live A/B, 2026-09-03): the previousRecommendations
+ * fallback below used to seed the pool from Groove's own last pick when
+ * orbitArtist was null. That is a spiral, not a one-off: turn 1 is
+ * ungrounded by construction (nothing named yet), so its recommendation may
+ * already be off-topic; that recommendation then seeded turn 2's pool; the
+ * model correctly declined to force a connection to an off-topic pool
+ * (confirmed live — pool_artist_hits: 0 against a Kendrick Lamar pool seeded
+ * from a MIKE conversation, vs. 4-5 of 6 when the same turn was seeded with
+ * the on-topic Earl Sweatshirt instead), producing another ungrounded turn,
+ * which seeded turn 3. Every silent turn compounded it, and nothing in
+ * either resolution step ever re-anchored to what the user actually said.
+ *
+ * A wrong pool is worse than no pool. Unseeded is a state already handled —
+ * D-042 tells Groove he has no verified list and to prefer fewer, surer
+ * picks. A pool seeded from our own suggestion is a state nothing handles.
+ * Fail closed instead, same principle D-034/D-042 already established for
+ * an empty pool.
  */
-export function resolveSeedArtist(orbitArtist, previousRecommendations = []) {
-  if (orbitArtist) return orbitArtist;
-  if (previousRecommendations.length > 0) {
-    const last = previousRecommendations[previousRecommendations.length - 1];
-    if (last?.artist) return last.artist;
-  }
-  return null;
+export function resolveSeedArtist(orbitArtist) {
+  return orbitArtist || null;
 }
