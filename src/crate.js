@@ -49,6 +49,32 @@ export function writeCrate(items) {
   }
 }
 
+// §4b: the crate tab's dragged vertical position. Same storage and the same
+// reasoning as the crate itself -- one night's arrangement, not a permanent
+// preference, so sessionStorage rather than localStorage. Absent (null)
+// means "never dragged," which CratePanel.jsx reads as "use the default CSS
+// position" rather than forcing a pixel value on every visitor.
+const CRATE_TAB_POSITION_KEY = 'rr_crate_tab_top';
+
+export function readCrateTabPosition() {
+  try {
+    const raw = sessionStorage.getItem(CRATE_TAB_POSITION_KEY);
+    if (raw == null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeCrateTabPosition(top) {
+  try {
+    sessionStorage.setItem(CRATE_TAB_POSITION_KEY, String(top));
+  } catch {
+    /* private browsing or quota, ignore. The in-memory position still works. */
+  }
+}
+
 /**
  * Only the fields the crate panel actually renders. Recommendation objects
  * carry explanations, ranks and validation status, none of which belong in a

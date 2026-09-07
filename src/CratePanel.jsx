@@ -12,7 +12,10 @@
 // possible at all, and something that materialises the first time you save is
 // something you had no reason to try.
 
+import { useEffect, useRef, useState } from 'react';
 import { connectionLabel } from './RecommendationCard';
+import { HuntChart } from './HuntCard';
+import { readCrateTabPosition, writeCrateTabPosition } from './crate';
 
 function StarIcon({ filled }) {
   return (
@@ -68,9 +71,56 @@ function AppleMusicIcon() {
   );
 }
 
+// §4b, P1-4-adjacent: hunt items saved to the crate get all three of
+// HuntCard's own search destinations, not just Spotify -- these two plus
+// spotifySearchUrl below mirror HuntCard.jsx exactly (same icons, same
+// search-URL shape), duplicated rather than shared per this file's existing
+// convention (SpotifyIcon/AppleMusicIcon above are already a second copy of
+// RecommendationCard's own icons, not imports of them).
+function BandcampIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+      <circle cx="12" cy="12" r="11" fill="#1DA0C3" />
+      <path d="M7 15.5h6.2L17 8.5h-6.2L7 15.5z" fill="#fff" />
+    </svg>
+  );
+}
+
+function YouTubeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+      <rect x="1" y="4.5" width="22" height="15" rx="4" fill="#FF0000" />
+      <path d="M10 8.3v7.4l6.5-3.7L10 8.3z" fill="#fff" />
+    </svg>
+  );
+}
+
 function spotifySearchUrl(track, artist) {
   return `https://open.spotify.com/search/${encodeURIComponent(`${track} ${artist}`)}`;
 }
+
+function bandcampSearchUrl(track, artist) {
+  return `https://bandcamp.com/search?q=${encodeURIComponent(`${track} ${artist}`)}`;
+}
+
+function youtubeSearchUrl(track, artist) {
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(`${track} ${artist}`)}`;
+}
+
+// §4b: the crate tab is draggable, vertically only, along the left edge.
+// Pointer events rather than HTML5 drag-and-drop -- drag-and-drop's default
+// ghost-image/drop-target model is built for moving an item INTO a target,
+// not repositioning a fixed control, and it fights touch scrolling in ways
+// pointer events don't once touch-action: none is set (see .crate-tab).
+// 10px, not 5 -- 5 is a pointer-device number. An ordinary tap on a
+// touchscreen routinely travels 3-8px before release, and a threshold that
+// tight reads real taps as drags: the crate stops opening on a phone, which
+// is worse than not having drag at all. 10px is the conventional touch
+// slop.
+const DRAG_THRESHOLD_PX = 10;
+// Gap kept from the wordmark/input-area edges the tab clamps against -- not
+// flush against either, so it never reads as touching them.
+const EDGE_MARGIN_PX = 12;
 
 export default function CratePanel({
   open,
@@ -83,16 +133,118 @@ export default function CratePanel({
   onOutboundClick,
   lastRemoved,
   onUndoRemove,
+  wordmarkRef,
+  inputAreaRef,
 }) {
   const count = items.length;
+
+  const tabRef = useRef(null);
+  // The pointer sequence currently in progress, or null between drags.
+  // Plain object in a ref rather than state -- nothing here needs to
+  // trigger a render on its own; only the derived top (below) does.
+  const dragRef = useRef(null);
+  // Set true the instant a drag crosses DRAG_THRESHOLD_PX, so the click
+  // event that naturally follows a pointerup can be told apart from a
+  // genuine tap and suppressed -- see handleClick. Cleared by that same
+  // click, not by pointerup, since the click always arrives after.
+  const draggedRef = useRef(false);
+  // null = "never dragged, use the default CSS position" (top: 50%
+  // desktop, top: 90px mobile -- see riff-radar.css). Only ever becomes
+  // non-null once the visitor actually drags the tab.
+  const [tabTop, setTabTop] = useState(() => readCrateTabPosition());
+
+  // Available drag range right now, in viewport pixels -- read live rather
+  // than cached, since the wordmark and input area can both move (resize,
+  // rotation, the textarea growing with typed text).
+  function clampTop(top) {
+    const tabHeight = tabRef.current?.offsetHeight || 0;
+    const wordmarkBottom = wordmarkRef?.current?.getBoundingClientRect().bottom ?? 0;
+    const inputTop = inputAreaRef?.current?.getBoundingClientRect().top ?? window.innerHeight;
+    const min = wordmarkBottom + EDGE_MARGIN_PX;
+    const max = Math.max(min, inputTop - tabHeight - EDGE_MARGIN_PX);
+    return Math.min(Math.max(top, min), max);
+  }
+
+  // A position saved last session (or even earlier this one, before a
+  // resize or rotation) can be stale against the CURRENT layout -- re-clamp
+  // on mount and on every resize, so a saved position never leaves the tab
+  // sitting on top of the wordmark or the input area. Safe to run
+  // unconditionally: the functional update below is a no-op whenever
+  // tabTop is still null (never dragged), which is when the default CSS
+  // position applies and there is nothing here to correct.
+  useEffect(() => {
+    function reclamp() {
+      setTabTop((prev) => (prev == null ? prev : clampTop(prev)));
+    }
+    reclamp();
+    window.addEventListener('resize', reclamp);
+    return () => window.removeEventListener('resize', reclamp);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handlePointerDown(e) {
+    if (open) return; // opacity:0/pointer-events:none while open makes this
+    // unreachable in practice, but guard explicitly rather than rely on CSS.
+    const rect = tabRef.current.getBoundingClientRect();
+    dragRef.current = { startY: e.clientY, startTop: rect.top, currentTop: rect.top };
+    tabRef.current.setPointerCapture(e.pointerId);
+  }
+
+  function handlePointerMove(e) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const dy = e.clientY - drag.startY;
+    if (!draggedRef.current && Math.abs(dy) > DRAG_THRESHOLD_PX) {
+      draggedRef.current = true;
+    }
+    if (draggedRef.current) {
+      const next = clampTop(drag.startTop + dy);
+      drag.currentTop = next;
+      setTabTop(next);
+    }
+  }
+
+  function handlePointerUp() {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (!drag) return;
+    if (draggedRef.current) {
+      writeCrateTabPosition(drag.currentTop);
+    }
+  }
+
+  // A cancelled pointer sequence (rare -- a system gesture interrupting,
+  // for instance) is neither a completed drag nor a tap. Nothing gets
+  // persisted, and draggedRef is set (not cleared) so that IF a click still
+  // follows -- the pointer-events spec says it shouldn't after a cancel,
+  // but this costs nothing to guard against -- handleClick treats it as a
+  // drag to discard rather than as a tap that opens or closes the crate.
+  function handlePointerCancel() {
+    dragRef.current = null;
+    draggedRef.current = true;
+  }
+
+  function handleClick() {
+    if (draggedRef.current) {
+      draggedRef.current = false;
+      return;
+    }
+    (open ? onClose : onOpen)();
+  }
 
   return (
     <>
       {/* Always present, count badge only when there is something in it. */}
       <button
+        ref={tabRef}
         type="button"
         className={`crate-tab${open ? ' crate-tab-open' : ''}`}
-        onClick={open ? onClose : onOpen}
+        style={tabTop != null ? { top: `${tabTop}px`, transform: 'none' } : undefined}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onClick={handleClick}
         aria-label={open ? 'Close crate' : `Open crate, ${count} saved`}
         aria-expanded={open}
       >
@@ -146,6 +298,13 @@ export default function CratePanel({
                 const key = `${item.track}::${item.artist}`;
                 const isPlaying = activePreviewKey === key;
                 const spotifyUrl = spotifySearchUrl(item.track, item.artist);
+                // Only ever read for a hunt item (see crate-item-actions
+                // below), but built unconditionally here alongside
+                // spotifyUrl rather than inside a branch -- these two lines
+                // cost nothing for a non-hunt item and keep every URL this
+                // row might need built in one place.
+                const bandcampUrl = bandcampSearchUrl(item.track, item.artist);
+                const youtubeUrl = youtubeSearchUrl(item.track, item.artist);
                 // K3d: connection labels carry through onto crate rows -- six
                 // months later the label is the only record of why something
                 // was kept. Same per-card-type pill logic as RecommendationCard
@@ -155,7 +314,17 @@ export default function CratePanel({
 
                 return (
                   <li className="crate-item" key={key}>
-                    {item.artworkUrl ? (
+                    {/* §4b, P1-4-adjacent: a hunt item never had artwork to
+                        begin with (D-037 -- there's no confirmed catalogue
+                        entry to pull it from), so it used to fall through to
+                        a blank grey square. The same chart mark HuntCard.jsx
+                        shows on the actual card goes here instead -- same
+                        object, same meaning, not a missing image. */}
+                    {item.isHunt ? (
+                      <div className="crate-item-art crate-item-art-hunt" aria-hidden="true">
+                        <HuntChart />
+                      </div>
+                    ) : item.artworkUrl ? (
                       <img className="crate-item-art" src={item.artworkUrl} alt="" loading="lazy" />
                     ) : (
                       <div className="crate-item-art crate-item-art-empty" aria-hidden="true" />
@@ -165,66 +334,143 @@ export default function CratePanel({
                       <div className="crate-item-header">
                         {item.isHunt && <span className="crate-pill crate-pill-hunt">Worth the dig</span>}
                         {label && <span className="crate-pill">{label}</span>}
-                        {item.distant && <span className="crate-pill">Far signal</span>}
+                        {/* §4b, same principle as N-3: distant is a modifier
+                            on the pill beside it, not a second type -- an
+                            unboxed annotation, not a second full crate-pill
+                            competing with the first for the same row. */}
+                        {item.distant && <span className="crate-pill-distant">Far signal</span>}
                       </div>
                       <p className="crate-item-title">{item.track}</p>
                       <p className="crate-item-artist">{item.artist}</p>
                     </div>
 
                     <div className="crate-item-actions">
-                      {item.previewUrl && (
-                        <button
-                          type="button"
-                          className="crate-item-play"
-                          onClick={() => onTogglePlay(item)}
-                          aria-label={isPlaying ? 'Pause preview' : 'Play 30 second preview'}
-                          title={isPlaying ? 'Pause' : '30s preview'}
-                        >
-                          <PlayIcon playing={isPlaying} />
-                        </button>
-                      )}
+                      {/* §4b: hunt cards in the crate get all three of
+                          HuntCard's own search destinations, structurally --
+                          always exactly these three, in this order, never
+                          conditional on which fields happen to be populated.
+                          A hunt item never has a previewUrl or trackViewUrl
+                          (D-037: nothing was ever confirmed to exist), so the
+                          old conditional rendering below left it with only
+                          the one unconditional Spotify link -- one button
+                          where the card itself promises three. */}
+                      {item.isHunt ? (
+                        <>
+                          <a
+                            className="crate-item-link"
+                            href={spotifyUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() =>
+                              onOutboundClick?.({
+                                track: item.track,
+                                artist: item.artist,
+                                service: 'spotify',
+                                url: spotifyUrl,
+                                source: 'crate',
+                              })
+                            }
+                            aria-label={`Search ${item.track} on Spotify`}
+                            title="Spotify"
+                          >
+                            <SpotifyIcon />
+                          </a>
+                          <a
+                            className="crate-item-link"
+                            href={bandcampUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() =>
+                              onOutboundClick?.({
+                                track: item.track,
+                                artist: item.artist,
+                                service: 'bandcamp',
+                                url: bandcampUrl,
+                                source: 'crate',
+                              })
+                            }
+                            aria-label={`Search ${item.track} on Bandcamp`}
+                            title="Bandcamp"
+                          >
+                            <BandcampIcon />
+                          </a>
+                          <a
+                            className="crate-item-link"
+                            href={youtubeUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() =>
+                              onOutboundClick?.({
+                                track: item.track,
+                                artist: item.artist,
+                                service: 'youtube',
+                                url: youtubeUrl,
+                                source: 'crate',
+                              })
+                            }
+                            aria-label={`Search ${item.track} on YouTube`}
+                            title="YouTube"
+                          >
+                            <YouTubeIcon />
+                          </a>
+                        </>
+                      ) : (
+                        <>
+                          {item.previewUrl && (
+                            <button
+                              type="button"
+                              className="crate-item-play"
+                              onClick={() => onTogglePlay(item)}
+                              aria-label={isPlaying ? 'Pause preview' : 'Play 30 second preview'}
+                              title={isPlaying ? 'Pause' : '30s preview'}
+                            >
+                              <PlayIcon playing={isPlaying} />
+                            </button>
+                          )}
 
-                      {item.trackViewUrl && (
-                        <a
-                          className="crate-item-link"
-                          href={item.trackViewUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={() =>
-                            onOutboundClick?.({
-                              track: item.track,
-                              artist: item.artist,
-                              service: 'apple_music',
-                              url: item.trackViewUrl,
-                              source: 'crate',
-                            })
-                          }
-                          aria-label={`Open ${item.track} in Apple Music`}
-                          title="Apple Music"
-                        >
-                          <AppleMusicIcon />
-                        </a>
-                      )}
+                          {item.trackViewUrl && (
+                            <a
+                              className="crate-item-link"
+                              href={item.trackViewUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={() =>
+                                onOutboundClick?.({
+                                  track: item.track,
+                                  artist: item.artist,
+                                  service: 'apple_music',
+                                  url: item.trackViewUrl,
+                                  source: 'crate',
+                                })
+                              }
+                              aria-label={`Open ${item.track} in Apple Music`}
+                              title="Apple Music"
+                            >
+                              <AppleMusicIcon />
+                            </a>
+                          )}
 
-                      <a
-                        className="crate-item-link"
-                        href={spotifyUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() =>
-                          onOutboundClick?.({
-                            track: item.track,
-                            artist: item.artist,
-                            service: 'spotify',
-                            url: spotifyUrl,
-                            source: 'crate',
-                          })
-                        }
-                        aria-label={`Search ${item.track} on Spotify`}
-                        title="Spotify"
-                      >
-                        <SpotifyIcon />
-                      </a>
+                          <a
+                            className="crate-item-link"
+                            href={spotifyUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() =>
+                              onOutboundClick?.({
+                                track: item.track,
+                                artist: item.artist,
+                                service: 'spotify',
+                                url: spotifyUrl,
+                                source: 'crate',
+                              })
+                            }
+                            aria-label={`Search ${item.track} on Spotify`}
+                            title="Spotify"
+                          >
+                            <SpotifyIcon />
+                          </a>
+                        </>
+                      )}
 
                       <button
                         type="button"

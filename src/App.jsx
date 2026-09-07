@@ -117,6 +117,13 @@ export default function App() {
   const [activePreviewKey, setActivePreviewKey] = useState(null);
   const loggedPreviewKeysRef = useRef(new Set());
   const inputRef = useRef(null);
+  // §4b: the crate tab's drag range. CratePanel.jsx reads these two rects at
+  // drag time to clamp the tab between the wordmark and the input area, so
+  // dragging can never cover either -- passed down as refs rather than
+  // computed pixel bounds because the bounds have to stay live across
+  // resize/rotation, not be a one-time snapshot taken here.
+  const wordmarkRef = useRef(null);
+  const chatInputRowRef = useRef(null);
 
   // The pair shown this session. Held in a ref so re-renders never reshuffle it
   // mid-conversation, which would rewrite a moment the user was part of.
@@ -843,7 +850,7 @@ export default function App() {
   return (
     <>
       <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '1.5rem' }}>
-        <h1 className="app-logo">Riff Radar</h1>
+        <h1 className="app-logo" ref={wordmarkRef}>Riff Radar</h1>
 
         <div className="app-layout">
           <div className="app-layout-content-col">
@@ -1006,7 +1013,11 @@ export default function App() {
 
                 {loading && <p style={{ opacity: 0.6 }}>{loadingMessage}</p>}
 
-                <div className="chat-input-row" style={{ marginTop: '1.5rem' }}>
+                <div
+                  className="chat-input-row"
+                  ref={chatInputRowRef}
+                  style={{ marginTop: '1.5rem' }}
+                >
                   <div className="chat-input-wrap">
                     <textarea
                       ref={inputRef}
@@ -1108,6 +1119,8 @@ export default function App() {
         onOutboundClick={handleOutboundClick}
         lastRemoved={lastRemoved}
         onUndoRemove={handleUndoRemove}
+        wordmarkRef={wordmarkRef}
+        inputAreaRef={chatInputRowRef}
       />
 
       {/* §4a: one field, one designed moment. Consent and the status-label

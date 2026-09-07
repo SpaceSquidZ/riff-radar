@@ -23,7 +23,11 @@ import NoveltyControl from './NoveltyControl';
 // with one marked position instead -- same image every time, so it reads as
 // a state rather than a missing image. See .hunt-chart in riff-radar.css for
 // the --signal/--line/--text-faint token mapping.
-function HuntChart() {
+//
+// Exported (§4b, P1-4): CratePanel.jsx uses this same mark for a saved hunt
+// item's artwork slot instead of a blank grey square -- same object, same
+// meaning, in a second place it now belongs.
+export function HuntChart() {
   return (
     <svg viewBox="0 0 120 100" aria-hidden="true" className="hunt-chart">
       <path className="hc-line" d="M18 74 L34 52 L52 60 L64 42" />

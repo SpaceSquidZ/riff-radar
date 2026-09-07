@@ -564,7 +564,16 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
      .rec-row-save appears first in the DOM but claims column 2; and
      padding-left: 68px squeezed the third column narrower than its own
      contents, so Spotify overflowed the card. Flex with natural widths
-     cannot overflow and does not care about DOM order. */
+     cannot overflow and does not care about DOM order.
+
+     §4b: the order declarations from N-1 and .rec-row-links's margin-left:
+     auto are both gone now. Star, 30s, Apple, Spotify -- the order asked
+     for -- IS the DOM order (save, play, links; RecommendationCard.jsx),
+     so no `order` overrides are needed at all, and the auto margin that
+     pushed .rec-row-links to the row's right edge read as a gap splitting
+     one row of four controls into "two controls, then a separate group of
+     services" -- not the intent. Natural flow: one contiguous, left-
+     aligned row, a single gap between every control. */
   .rec-row-actions {
     width: 100%;
     display: flex;
@@ -573,9 +582,6 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
     padding-left: 0;
     min-width: 0;
   }
-  .rec-row-play  { order: 1; }
-  .rec-row-save  { order: 2; }
-  .rec-row-links { order: 3; margin-left: auto; }
 
   /* Hunt cards: same container, but no preview, and their three
      destinations are equals. */
@@ -1788,6 +1794,13 @@ body {
   font-family: inherit;
   box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
   transition: background 0.15s ease, color 0.15s ease;
+  /* §4b: without this, a touch-drag on this button is indistinguishable
+     from a page scroll to a mobile browser, which claims the gesture for
+     scrolling before CratePanel.jsx's pointermove handler ever sees it --
+     the drag simply wouldn't work on a phone at all. This is what makes
+     the vertical movement CratePanel.jsx tracks actually arrive as pointer
+     events instead. */
+  touch-action: none;
 }
 
 .crate-tab:hover {
@@ -1951,6 +1964,18 @@ body {
   background: #cdc7b7;
 }
 
+/* §4b, P1-4-adjacent: the chart mark instead of the blank grey square above,
+   for a saved hunt item. Same background/centring as .rec-row-artwork-hunt
+   on the card itself, scaled down to this row's 38px art slot -- .hunt-chart
+   sizes itself to 74% of whichever box it's actually in, so it scales
+   proportionally here without any size override of its own. */
+.crate-item-art-hunt {
+  background: #ddd6c2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* min-width:0 is what lets long titles shrink inside the flex row instead of
    forcing the drawer wider. */
 .crate-item-body {
@@ -1961,9 +1986,16 @@ body {
 /* K3d: connection labels carry through onto crate rows -- six months later
    the label is the only record of why something was kept. Smaller than the
    card's own .rec-pill since the row itself is denser, same dark-ink-on-
-   paper "typed onto the label" treatment. */
+   paper "typed onto the label" treatment.
+
+   §4b: flex-wrap: wrap unconditionally, regardless of how many pills this
+   row currently has -- at most two today (one type pill, plus distant as
+   an unboxed annotation below), but this guarantees nothing can overlap
+   even if a third label is added later, rather than relying on there
+   always being room for however many happen to exist right now. */
 .crate-item-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
   margin-bottom: 1px;
@@ -1978,6 +2010,21 @@ body {
   text-transform: uppercase;
   padding: 1.5px 5px;
   border-radius: 2px;
+  white-space: nowrap;
+}
+
+/* §4b, same principle as N-3 (.rec-pill-distant): distant is a modifier on
+   the pill beside it, not a second type, so it does not compete with it for
+   the same visual weight. No box, no background -- subordinate text next to
+   the real pill, not a peer of it. #6f6a5c matches N-3's own choice on the
+   card itself, for the same muted-caption role. */
+.crate-pill-distant {
+  background: transparent;
+  color: #6f6a5c;
+  font-size: 7.5px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
