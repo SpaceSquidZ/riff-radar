@@ -138,12 +138,22 @@ export default function App() {
   // wrapped mid-phrase, sat at low contrast, and collided with the
   // wordmark on first load. Replaced by a discrete sequence instead.
   //
-  // §4a rebuild: no longer an accumulating list left on screen (that read as
-  // three lines stacked in a corner, competing with the chat log beneath
-  // them). One line at a time, on the black field, then nothing, then the
-  // next -- so this is now an index into openerStatusLineText, not an
-  // array collecting every line shown so far. -1 means none showing.
-  const [openerStatusLineIndex, setOpenerStatusLineIndex] = useState(-1);
+  // §4a revision (07 Sep 2026): typed, accumulating lines, not a single
+  // line swapped in and out. Three pieces of state instead of one:
+  //   openerLinesShown  -- how many lines have OPENED so far (0-3). Lines
+  //                        below this index are done and rendered in full;
+  //                        never decreases, so each line's row mounts
+  //                        exactly once (key={i}) and its CSS height-open
+  //                        animation only ever plays that one time.
+  //   openerCharCount   -- how many characters of the CURRENTLY ACTIVE line
+  //                        (index openerLinesShown - 1) are revealed. Reset
+  //                        to 0 each time a new line opens.
+  //   openerEllipsis    -- the cycling "." / ".." / "..." suffix, only ever
+  //                        set once "decoding" (the last line) finishes
+  //                        typing; empty until then.
+  const [openerLinesShown, setOpenerLinesShown] = useState(0);
+  const [openerCharCount, setOpenerCharCount] = useState(0);
+  const [openerEllipsis, setOpenerEllipsis] = useState('');
 
   // The crate. Session-scoped on purpose: it survives a refresh but not a new
   // day, which is what it is. Cross-session persistence needs accounts.
@@ -302,6 +312,10 @@ export default function App() {
     // Each bubble is preceded by an acquisition state, so text resolves out of
     // the channel rather than appearing from nowhere.
     const timers = [];
+    // Declared out here (not inside the !isReturning branch below) so the
+    // shared cleanup at the bottom of this effect can always clear it,
+    // regardless of which branch actually set it.
+    let ellipsisInterval = null;
 
     function pushBubble(id, text, withRecords) {
       setAcquiring(false);
@@ -332,29 +346,74 @@ export default function App() {
     }
 
     if (!isReturning) {
-      // §4a rebuild of Brief M, P0-3's sequence. One line at a time on the
-      // black field -- not accumulated, not stacked -- each visible ~900ms
-      // with a ~250ms cross-fade, ~1150ms per line, ~3.5s total for three
-      // lines. openerStatusLineIndex (an index, not a growing array) is what
-      // makes "one line, then nothing, then the next" possible: each tick
-      // replaces what's showing rather than adding to it. See the CSS for
-      // the actual fade timing -- it's mount-triggered per index change, not
-      // driven from here.
-      const STATUS_LINE_MS = 1150;
-      OPENER_STATUS_LINES.forEach((_line, i) => {
-        timers.push(setTimeout(() => setOpenerStatusLineIndex(i), i * STATUS_LINE_MS));
+      // §4a revision (07 Sep 2026): typed and accumulating, not faded one at
+      // a time. Each line opens (its row height-animates 0 -> one line's
+      // height, ~260ms, in CSS), starts typing ~160ms into that so it isn't
+      // sitting empty while the row is still growing, then types at 45ms per
+      // character. ~380ms after a line finishes typing, the next one opens.
+      // Completed lines are never removed -- openerLinesShown only ever
+      // increases, so their rows mount once (key={i} below) and stay.
+      const CHAR_MS = 45;
+      const TYPING_START_DELAY_MS = 160;
+      const LINE_PAUSE_MS = 380;
+      const ELLIPSIS_STEP_MS = 380;
+      const ELLIPSIS_FRAMES = ['.', '..', '...'];
+      // ~1300ms, per spec -- the gap between "decoding" finishing its own
+      // typing and black lifting. Not tied to the ellipsis in any way; the
+      // ellipsis is what gets CUT OFF by this firing, not what schedules it.
+      const BLACK_LIFT_DELAY_MS = 1300;
+
+      let cursor = 0;
+      let lastLineTypingEnd = 0;
+      OPENER_STATUS_LINES.forEach((line, i) => {
+        const lineOpenAt = cursor;
+        timers.push(
+          setTimeout(() => {
+            setOpenerLinesShown(i + 1);
+            setOpenerCharCount(0);
+          }, lineOpenAt)
+        );
+
+        const typingStart = lineOpenAt + TYPING_START_DELAY_MS;
+        for (let c = 1; c <= line.length; c++) {
+          timers.push(setTimeout(() => setOpenerCharCount(c), typingStart + c * CHAR_MS));
+        }
+        const typingEnd = typingStart + line.length * CHAR_MS;
+        lastLineTypingEnd = typingEnd;
+        cursor = typingEnd + LINE_PAUSE_MS;
       });
-      // Step 6: black lifts as the interface arrives, which is the same
-      // moment the FIRST bubble's own acquiring indicator would normally
-      // begin -- not when its text resolves. Lifting any later would hide
-      // the signal-acquiring animation behind black for its entire run and
-      // then cut straight to text, undermining the one thing "receiver
-      // aligned" etc. are supposed to set up.
-      const interfaceArrivesAt = OPENER_STATUS_LINES.length * STATUS_LINE_MS;
+
+      // "decoding" (the last line) keeps a cycling ellipsis running once its
+      // own text is done typing, right up until black lifts. A static "..."
+      // reads as finished, and this is deliberately the last thing on
+      // screen before the handoff -- it needs to keep reading as active.
       timers.push(
-        setTimeout(() => setOpeningSequenceActive(false), interfaceArrivesAt)
+        setTimeout(() => {
+          let step = 0;
+          setOpenerEllipsis(ELLIPSIS_FRAMES[step]);
+          ellipsisInterval = setInterval(() => {
+            step = (step + 1) % ELLIPSIS_FRAMES.length;
+            setOpenerEllipsis(ELLIPSIS_FRAMES[step]);
+          }, ELLIPSIS_STEP_MS);
+        }, lastLineTypingEnd)
       );
-      let cursor = interfaceArrivesAt;
+
+      // Step 6: black lifts here, at the same moment the FIRST bubble's own
+      // acquiring indicator would normally begin -- not when its text
+      // resolves. Lifting any later would hide the signal-acquiring
+      // animation behind black for its entire run and then cut straight to
+      // text, undermining the one thing "receiver aligned" etc. are
+      // supposed to set up. All three lines are still visible right up to
+      // this instant; nothing here removes or replaces them, the whole
+      // field just goes away.
+      const interfaceArrivesAt = lastLineTypingEnd + BLACK_LIFT_DELAY_MS;
+      timers.push(
+        setTimeout(() => {
+          setOpeningSequenceActive(false);
+          if (ellipsisInterval) clearInterval(ellipsisInterval);
+        }, interfaceArrivesAt)
+      );
+      cursor = interfaceArrivesAt;
       FIRST_CONTACT.forEach((bubble, i) => {
         cursor += bubble.delayMs;
         cursor = schedule(cursor, `opener-${i}`, bubble.text, !!bubble.showRecords);
@@ -379,6 +438,7 @@ export default function App() {
 
     return () => {
       timers.forEach(clearTimeout);
+      if (ellipsisInterval) clearInterval(ellipsisInterval);
       setAcquiring(false);
     };
   }, [openerCanStart]);
@@ -1073,19 +1133,35 @@ export default function App() {
             }}
             onClose={handleConsentDismiss}
           />
-          {!consentOpen && openerStatusLineIndex >= 0 && (
-            // key={openerStatusLineIndex} forces a fresh mount per line,
-            // which is what retriggers the fade-in/hold/fade-out animation
-            // in CSS -- see .opener-status-line. Without the key change,
-            // React would just patch the existing node's text and the
-            // animation would never replay.
-            <p
-              key={openerStatusLineIndex}
-              className="opener-status-line"
-              role="status"
-            >
-              {OPENER_STATUS_LINES[openerStatusLineIndex]}
-            </p>
+          {/* §4a revision, 07 Sep 2026: typed and accumulating. Deliberately
+              no role="status"/aria-live here -- that's the right call for a
+              line that changes once, but this text updates on every
+              keystroke of the typewriter effect, and a live region would
+              have a screen reader announce each character as it lands. The
+              text is still there in the DOM either way, just not narrated
+              mid-type. */}
+          {!consentOpen && openerLinesShown > 0 && (
+            <div className="opener-status-stack">
+              {OPENER_STATUS_LINES.slice(0, openerLinesShown).map((fullText, i) => {
+                const isActive = i === openerLinesShown - 1;
+                const shown = isActive ? fullText.slice(0, openerCharCount) : fullText;
+                const stillTyping = isActive && openerCharCount < fullText.length;
+                const isDecodingDone =
+                  isActive && !stillTyping && i === OPENER_STATUS_LINES.length - 1;
+                return (
+                  // key={i}, never reused for a different line and never
+                  // removed once added -- that's what makes this row's own
+                  // CSS height-open animation (mount-triggered) play exactly
+                  // once, the moment this line first appears, and never
+                  // again on the re-renders every keystroke causes.
+                  <div key={i} className="opener-status-line">
+                    {shown}
+                    {stillTyping && <span className="opener-caret" aria-hidden="true" />}
+                    {isDecodingDone && openerEllipsis}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
       )}

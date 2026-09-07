@@ -887,43 +887,117 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   }
 }
 
-/* §4a rebuild of Brief M, P0-3 (reverting Brief K 3b's interleaved
-   treatment). No longer a list accumulating above the chat log -- one line
-   at a time, centred on the black field App.jsx renders around it (see
-   .opener-black-field below), large, and gone before the next one arrives.
-   1150ms total per line matches STATUS_LINE_MS in App.jsx exactly: ~250ms
-   fade in, ~900ms fully visible (22%/78% of the keyframe), ~250ms fade out.
-   Three lines land at ~3.45s, "about 3.5 seconds total" per spec. */
-.opener-status-line {
+/* §4a revision (07 Sep 2026): typed and accumulating, replacing the
+   previous one-at-a-time fade (Brief M, P0-3 originally; reverting Brief
+   K 3b's interleaved treatment before that). .opener-status-stack is the
+   positioned, centred container; .opener-status-line is now a per-line row
+   inside it rather than independently positioned.
+
+   Each row height-animates open (0 -> one line's height) when it first
+   mounts, and the STACK's own translate(-50%, -50%) recentres for free as
+   it grows: a percentage transform is relative to the element's own size,
+   so a row that grows the stack's height by Δh shifts the whole stack up
+   by Δh/2 automatically. That is "the rise comes free from the centring,
+   no separate transform needed" -- there is no JS-driven repositioning
+   anywhere in this file or App.jsx for the already-completed lines. */
+.opener-status-stack {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.opener-status-line {
+  height: 0;
+  overflow: hidden;
+  line-height: 1.3;
   margin: 0;
-  width: max-content;
-  max-width: 90vw;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: clamp(20px, 5.5vw, 34px);
-  letter-spacing: 0.14em;
+  /* Source strings in grooveOpeners.js stay lowercase -- "origin
+     unresolved" is canon text, not something to rewrite at the source.
+     Uppercase is a presentation choice, applied here only. */
+  text-transform: uppercase;
+  white-space: nowrap;
   color: #d8d3c6;
   text-align: center;
-  animation: opener-status-line-fade 1150ms ease both;
+  animation: opener-line-open 260ms ease both;
 }
 
-@keyframes opener-status-line-fade {
-  0%   { opacity: 0; }
-  22%  { opacity: 1; }
-  78%  { opacity: 1; }
-  100% { opacity: 0; }
+@keyframes opener-line-open {
+  from { height: 0; }
+  to   { height: 1.3em; }
 }
 
-/* Reduced-motion viewers get each line at full opacity for its slot rather
-   than the fade -- still one at a time, still gone before the next, just
-   without the animated transition in or out. */
+/* Typing itself (which character is revealed when) is entirely App.jsx's
+   timers, not CSS -- this only draws the caret that sits at the end of
+   whatever's been typed so far. A CSS box rather than a Unicode block
+   glyph (e.g. "█"), so it renders identically regardless of which font in
+   the monospace stack above actually ends up handling this text. */
+.opener-caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1em;
+  margin-left: 0.08em;
+  background: currentColor;
+  vertical-align: -0.12em;
+  animation: opener-caret-blink 1s linear infinite;
+}
+
+@keyframes opener-caret-blink {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* Two ranges, not one clamp -- a single clamp(20px, 5.5vw, 34px) worked
+   when only one line was ever on screen, but three accumulated lines need
+   a size that actually holds a laptop viewport (34px reads too small
+   there) with a verified floor on a narrow phone. The ranges meet at 26px
+   by design: the phone cap and the laptop floor are the same value, so
+   nothing jumps crossing 600px. If either bound changes, change the other
+   to match.
+
+   ORIGIN UNRESOLVED (17 characters) with the caret attached is the widest
+   state the field ever reaches -- roughly 85% of available width at a
+   320px viewport with these values. white-space: nowrap above means this
+   can never wrap onto a second line regardless; it has to fit, not
+   degrade, which is the whole reason for verifying at 320px specifically
+   rather than 390px -- 320px is where it clips first if it clips at all. */
+@media (max-width: 600px) {
+  .opener-status-line {
+    font-size: clamp(19px, 5.4vw, 26px);
+    letter-spacing: 0.12em;
+  }
+  .opener-black-field {
+    padding-inline: 16px;
+  }
+}
+
+@media (min-width: 601px) {
+  .opener-status-line {
+    font-size: clamp(26px, 3.4vw, 44px);
+    letter-spacing: 0.16em;
+  }
+  .opener-black-field {
+    padding-inline: 40px;
+  }
+}
+
+/* Reduced-motion viewers still get the accumulating lines -- just without
+   the grow-in (rows render at full height immediately) or the blink (caret
+   holds solid while present). The character-by-character reveal itself is
+   still driven by App.jsx's timers regardless of this media query; CSS
+   alone can't make a character exist in the DOM sooner than the JS state
+   controlling it decides to add it. */
 @media (prefers-reduced-motion: reduce) {
   .opener-status-line {
     animation: none;
-    opacity: 1;
+    height: 1.3em;
+  }
+  .opener-caret {
+    animation: none;
   }
 }
 
