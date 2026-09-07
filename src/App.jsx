@@ -32,6 +32,12 @@ import { logEvent } from './supabaseClient';
 import { isTester } from './isTester';
 import './riff-radar.css';
 
+// §4a. Sourced once, at module scope, from FIRST_CONTACT's own statusLabel
+// fields -- the three lines have one home, not two, and this is the shape
+// both the scheduling effect and the JSX below need (an index into a fixed
+// array), not the per-bubble objects FIRST_CONTACT itself carries.
+const OPENER_STATUS_LINES = FIRST_CONTACT.map((b) => b.statusLabel).filter(Boolean);
+
 const LOADING_MESSAGES = [
   'Flipping through the shelf...',
   'Pulling a few records...',
@@ -79,6 +85,20 @@ export default function App() {
   // below. Null unless there is an actual conversation to resume.
   const [restoredConversation] = useState(() => loadConversation());
 
+  // §4a: the consent notice, the status-label sequence, and the hold on
+  // Groove's opener are one designed moment (an unlit channel coming online),
+  // not three independent fixes -- this is the single flag that keeps the
+  // whole viewport black across both the consent phase and the status-line
+  // phase, until the interface itself is ready to arrive. False from the
+  // start on a restored conversation: resuming never replays this, there is
+  // nothing to sequence into. Must be declared after restoredConversation --
+  // its initializer reads that value immediately, not just on some later
+  // render, so declaring it first would read restoredConversation out of its
+  // temporal dead zone and throw on the very first render.
+  const [openingSequenceActive, setOpeningSequenceActive] = useState(
+    () => !restoredConversation
+  );
+
   const [sourceTrack, setSourceTrack] = useState(() => restoredConversation?.sourceTrack ?? null);
   // Brief B, Change 1. Separate from sourceTrack on purpose: sourceTrack only
   // updates on a full track confirmation and still drives the "ON THE TABLE"
@@ -116,11 +136,14 @@ export default function App() {
   // Brief M, P0-3, reverting Brief K 3b. Status text used to be carried
   // inline by the acquisition indicator, interleaved between bubbles -- it
   // wrapped mid-phrase, sat at low contrast, and collided with the
-  // wordmark on first load. Replaced by a discrete sequence rendered once,
-  // before any bubble, that stays on screen once complete (see
-  // openerStatusLines below). The acquiring indicator itself goes back to
-  // being label-less everywhere, first contact included.
-  const [openerStatusLines, setOpenerStatusLines] = useState([]);
+  // wordmark on first load. Replaced by a discrete sequence instead.
+  //
+  // §4a rebuild: no longer an accumulating list left on screen (that read as
+  // three lines stacked in a corner, competing with the chat log beneath
+  // them). One line at a time, on the black field, then nothing, then the
+  // next -- so this is now an index into openerStatusLineText, not an
+  // array collecting every line shown so far. -1 means none showing.
+  const [openerStatusLineIndex, setOpenerStatusLineIndex] = useState(-1);
 
   // The crate. Session-scoped on purpose: it survives a refresh but not a new
   // day, which is what it is. Cross-session persistence needs accounts.
@@ -233,6 +256,20 @@ export default function App() {
     return () => clearTimeout(timer);
   }, []);
 
+  // §4a's own guard, in addition to the one above: "it must never be
+  // possible to reach a state where the screen stays black and nothing
+  // happens." The consent-mount guard covers the one realistic failure
+  // (ConsentPanel never rendering); this is a second, unconditional net for
+  // any failure mode neither of us has thought of -- if the opening
+  // sequence hasn't lifted the black field on its own within 8s (roughly
+  // double the ~3.5s label sequence plus room for a slow first bubble),
+  // force it down regardless of what else did or didn't run. Never fires
+  // under normal conditions; only ever a backstop.
+  useEffect(() => {
+    const timer = setTimeout(() => setOpeningSequenceActive(false), 8000);
+    return () => clearTimeout(timer);
+  }, []);
+
   // D-031, AC-1 still holds: no landing phase, no form phase, nothing
   // blocks ACCESS to the conversation behind a click. What changed (Brief
   // N, N-4) is that the opener SEQUENCE now waits for openerCanStart
@@ -295,30 +332,43 @@ export default function App() {
     }
 
     if (!isReturning) {
-      // Brief M, P0-3. A discrete sequence, staged before any bubble, that
-      // stays on screen once complete rather than being carried inline by
-      // the acquisition indicator (Brief K 3b, reverted -- it wrapped
-      // mid-phrase and collided with the wordmark on first load). Sourced
-      // from FIRST_CONTACT's own statusLabel fields so the three lines
-      // have one home, not two. STATUS_LINE_MS matches K3b's own finding
-      // that 600ms isn't long enough to read a two-word line.
-      const STATUS_LINE_MS = 900;
-      const statusLines = FIRST_CONTACT.map((b) => b.statusLabel).filter(Boolean);
-      statusLines.forEach((line, i) => {
-        timers.push(
-          setTimeout(() => {
-            setOpenerStatusLines((prev) => [...prev, line]);
-          }, i * STATUS_LINE_MS)
-        );
+      // §4a rebuild of Brief M, P0-3's sequence. One line at a time on the
+      // black field -- not accumulated, not stacked -- each visible ~900ms
+      // with a ~250ms cross-fade, ~1150ms per line, ~3.5s total for three
+      // lines. openerStatusLineIndex (an index, not a growing array) is what
+      // makes "one line, then nothing, then the next" possible: each tick
+      // replaces what's showing rather than adding to it. See the CSS for
+      // the actual fade timing -- it's mount-triggered per index change, not
+      // driven from here.
+      const STATUS_LINE_MS = 1150;
+      OPENER_STATUS_LINES.forEach((_line, i) => {
+        timers.push(setTimeout(() => setOpenerStatusLineIndex(i), i * STATUS_LINE_MS));
       });
-      // Brief settle after the last line before Groove's own bubble timing
-      // picks up beneath the sequence.
-      let cursor = statusLines.length * STATUS_LINE_MS + 400;
+      // Step 6: black lifts as the interface arrives, which is the same
+      // moment the FIRST bubble's own acquiring indicator would normally
+      // begin -- not when its text resolves. Lifting any later would hide
+      // the signal-acquiring animation behind black for its entire run and
+      // then cut straight to text, undermining the one thing "receiver
+      // aligned" etc. are supposed to set up.
+      const interfaceArrivesAt = OPENER_STATUS_LINES.length * STATUS_LINE_MS;
+      timers.push(
+        setTimeout(() => setOpeningSequenceActive(false), interfaceArrivesAt)
+      );
+      let cursor = interfaceArrivesAt;
       FIRST_CONTACT.forEach((bubble, i) => {
         cursor += bubble.delayMs;
         cursor = schedule(cursor, `opener-${i}`, bubble.text, !!bubble.showRecords);
       });
     } else {
+      // §4a: "or immediately on load" for a visitor whose consent was
+      // already recorded. The three status labels are first-contact copy,
+      // paired one-to-one with what Groove says in FIRST_CONTACT specifically
+      // (see grooveOpeners.js) -- reusing them here would replay a
+      // first-contact beat on a return visit, which grooveOpeners.js's own
+      // header explicitly forbids. So a returning visitor's black field
+      // lifts at once, straight into their normal greeting timing, with no
+      // manufactured label sequence standing in for one that doesn't apply.
+      setOpeningSequenceActive(false);
       // The first-contact script only works once. Replaying it would have
       // Groove failing to remember the most significant thing that has ever
       // happened to him (Bible 0c).
@@ -699,6 +749,15 @@ export default function App() {
     });
   }
 
+  // Passed to ConsentPanel as onClose. All three of its own dismiss paths
+  // (Accept, Decline, Escape) funnel through this one function, so however
+  // the visitor actually left the panel, the opener unblocks the same way,
+  // on the same tick.
+  function handleConsentDismiss() {
+    setConsentOpen(false);
+    setOpenerCanStart(true);
+  }
+
   function handleOutboundClick({ track, artist, service, url, source }) {
     emit('outbound_click', {
       track,
@@ -732,18 +791,6 @@ export default function App() {
                 `phase === 'chat'` gate (phase never left its initial value,
                 setPhase had no callers) is removed, not just satisfied. */}
               <div>
-                {/* Brief M, P0-3. Discrete pre-bubble sequence, first contact
-                    only (openerStatusLines only ever gets populated in the
-                    !isReturning branch). Renders once, above the whole log,
-                    and is never cleared -- it stays on screen as Groove's
-                    bubbles accumulate beneath it. */}
-                {openerStatusLines.length > 0 && (
-                  <div className="opener-status-sequence" role="status">
-                    {openerStatusLines.map((line, i) => (
-                      <p key={i} className="opener-status-line">{line}</p>
-                    ))}
-                  </div>
-                )}
                 {messages.map((msg, i) => {
                   // Hide an assistant turn only when it carries NOTHING at all.
                   //
@@ -1003,20 +1050,45 @@ export default function App() {
         onUndoRemove={handleUndoRemove}
       />
 
-      <ConsentPanel
-        open={consentOpen}
-        onMount={() => {
-          consentPanelMountedRef.current = true;
-        }}
-        onClose={() => {
-          setConsentOpen(false);
-          // Brief N, N-4: a genuine dismissal (Accept, Decline, the close
-          // button, or the scrim -- ConsentPanel.jsx calls onClose for all
-          // four) unblocks the opener immediately, same tick as the panel
-          // closing. No need to wait on the mount-failure guard above.
-          setOpenerCanStart(true);
-        }}
-      />
+      {/* §4a: one field, one designed moment. Consent and the status-label
+          sequence used to be two independently-styled things (a light scrim
+          behind a side drawer, then a stack of lines rendered inline above
+          the chat log) that happened to occur back to back. This is the
+          single unlit surface both phases share -- ConsentPanel no longer
+          renders its own scrim (see ConsentPanel.jsx), so this is the only
+          thing standing between "full black" and the interface for the
+          whole sequence, consent through the last status line.
+
+          No onClick here (06 Sep 2026 fix): backdrop-click-to-dismiss was
+          one of two paths that bypassed markConsentSeen(), see
+          ConsentPanel.jsx's header. Got it, No thanks, and Escape --
+          handled entirely inside ConsentPanel -- are the only three ways
+          out now, and this field has no dismiss behaviour of its own. */}
+      {openingSequenceActive && (
+        <div className="opener-black-field">
+          <ConsentPanel
+            open={consentOpen}
+            onMount={() => {
+              consentPanelMountedRef.current = true;
+            }}
+            onClose={handleConsentDismiss}
+          />
+          {!consentOpen && openerStatusLineIndex >= 0 && (
+            // key={openerStatusLineIndex} forces a fresh mount per line,
+            // which is what retriggers the fade-in/hold/fade-out animation
+            // in CSS -- see .opener-status-line. Without the key change,
+            // React would just patch the existing node's text and the
+            // animation would never replay.
+            <p
+              key={openerStatusLineIndex}
+              className="opener-status-line"
+              role="status"
+            >
+              {OPENER_STATUS_LINES[openerStatusLineIndex]}
+            </p>
+          )}
+        </div>
+      )}
     </>
   );
 }
