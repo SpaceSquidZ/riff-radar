@@ -153,46 +153,53 @@ export default function RecommendationCard({
   return (
     <div className="rec-card">
       <div className="rec-row">
-        <div className="rec-row-art">
-          {hasArtwork ? (
-            <img src={rec.artworkUrl} alt="" className="rec-row-artwork" />
-          ) : (
-            <div className="rec-row-artwork rec-row-artwork-empty" aria-hidden="true" />
-          )}
-        </div>
+        {hasArtwork ? (
+          <img src={rec.artworkUrl} alt="" className="rec-row-artwork" />
+        ) : (
+          <div className="rec-row-artwork rec-row-artwork-empty" aria-hidden="true" />
+        )}
 
-        <div className="rec-row-body">
-          <div className="rec-row-header">
-            {label && <span className="rec-pill">{label}</span>}
-            {/* DISTANT is a tag, never a type: far in language, geography, or era,
-                but still carrying a real connection underneath. Display string
-                only (K5a) -- rec.distant itself is unchanged. */}
-            {rec.distant && <span className="rec-pill rec-pill-distant">Far signal</span>}
-            {metaLine && <span className="rec-row-meta">{metaLine}</span>}
-          </div>
+        <p className="rec-row-title">{rec.track}</p>
+        <p className="rec-row-artist">{rec.artist}</p>
 
-          <p className="rec-row-title">{rec.track}</p>
-          <p className="rec-row-artist">{rec.artist}</p>
-
-          {rec.explanation && (
-            <>
-              <p
-                ref={explanationRef}
-                className={`rec-row-explanation${expanded ? ' expanded' : ''}`}
+        {rec.explanation && (
+          <>
+            <p
+              ref={explanationRef}
+              className={`rec-row-explanation${expanded ? ' expanded' : ''}`}
+            >
+              {rec.explanation}
+            </p>
+            {isOverflowing && (
+              <button
+                type="button"
+                className="rec-read-more"
+                onClick={() => setExpanded((e) => !e)}
               >
-                {rec.explanation}
-              </p>
-              {isOverflowing && (
-                <button
-                  type="button"
-                  className="rec-read-more"
-                  onClick={() => setExpanded((e) => !e)}
-                >
-                  {expanded ? 'Show less' : 'Read more'}
-                </button>
-              )}
-            </>
-          )}
+                {expanded ? 'Show less' : 'Read more'}
+              </button>
+            )}
+          </>
+        )}
+
+        {/* \u00a74c: the facts line. Replaces the old header arrangement (pill,
+            distant tag, and meta all crowded above the title) -- year/genre
+            on the left, the connection tag on the right, one shared row all
+            three card types now use (see .rec-stamp, and OpenerRecord.jsx /
+            HuntCard.jsx for the other two). Both sides always render, even
+            empty, so this is reliably always exactly two flex children:
+            without that, justify-content: space-between would put a lone
+            surviving child wherever ITS position happens to fall, not
+            reliably on the correct side. */}
+        <div className="rec-stamp">
+          <span className="rec-row-meta">{metaLine}</span>
+          <div className="rec-stamp-tag">
+            {label && <span className="rec-pill">{label}</span>}
+            {/* DISTANT is a tag, never a type: far in language, geography, or
+                era, but still carrying a real connection underneath. Display
+                string only (K5a) -- rec.distant itself is unchanged. */}
+            {rec.distant && <span className="rec-pill-distant">Far signal</span>}
+          </div>
         </div>
 
         <div className="rec-row-actions">

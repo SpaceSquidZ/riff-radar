@@ -96,10 +96,26 @@ export default function OpenerRecord({
         <div className="opener-record-art opener-record-art-empty" aria-hidden="true" />
       )}
 
-      <div className="opener-record-body">
-        <p className="opener-record-title">{track}</p>
-        <p className="opener-record-artist">{artist}</p>
-        {metaLine && <p className="opener-record-meta">{metaLine}</p>}
+      <p className="opener-record-title">{track}</p>
+      <p className="opener-record-artist">{artist}</p>
+
+      {/* No explanation, no aside -- D-025 (see this file's header). */}
+
+      {/* §4c: the shared facts line (.rec-stamp -- same class as
+          RecommendationCard.jsx and HuntCard.jsx; geometry is unified across
+          all three card types, identity is not). Left side still carries
+          year/genre same as the other two. The right side deliberately
+          renders the tag slot EMPTY rather than omitting it: D-025 says the
+          absence of a claim is this card's defining feature, and an empty
+          right edge on the same line the other cards use a tag on is a
+          sharper expression of that than giving the opener a different
+          layout ever was. min-height on .rec-stamp (riff-radar.css) is what
+          keeps this line open at its usual height with nothing in it,
+          rather than collapsing and pulling the actions row up to meet the
+          artist line. */}
+      <div className="rec-stamp">
+        <span className="opener-record-meta">{metaLine}</span>
+        <div className="rec-stamp-tag" aria-hidden="true" />
       </div>
 
       <div className="opener-record-actions">

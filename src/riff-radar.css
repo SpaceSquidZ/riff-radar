@@ -386,10 +386,21 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   max-width: 680px;
 }
 
+/* §4c (unifies geometry across RecommendationCard, OpenerRecord, HuntCard --
+   see .rec-stamp further down for the fuller rationale): one column, not a
+   row. Artwork is its own row at the top, then title/artist/explanation/
+   aside/facts-line/actions stack directly as siblings -- no .rec-row-body
+   wrapper anymore, since a column layout has no shrink-to-fit problem for
+   its children the way a row did (that wrapper's whole job was min-width:
+   0, which a row-flex text sibling needs and a stretched column child
+   never did). Height varies only because the explanation varies; width,
+   element order and offsets are now identical across all three card
+   types, even though the three stay separate components (D-025) with
+   their own colours, copy, and text classes. */
 .rec-row {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 4px;
   background: #ffffff;
   border: 1px solid #e5e5e5;
   border-radius: 12px;
@@ -397,13 +408,16 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   color: #1a1a1a;
 }
 
-.rec-row-art {
-  flex: 0 0 auto;
-}
-
+/* 92px, top left, its own row -- up from 56px. flex-shrink: 0 and
+   align-self: flex-start are both belt-and-suspenders here: a fixed
+   width/height already keeps stretch (the column's default cross-axis
+   behaviour) from resizing this, but stating the intent directly is
+   cheaper than relying on that fallback being obvious to the next reader. */
 .rec-row-artwork {
-  width: 56px;
-  height: 56px;
+  width: 92px;
+  height: 92px;
+  flex-shrink: 0;
+  align-self: flex-start;
   border-radius: 6px;
   object-fit: cover;
   display: block;
@@ -411,21 +425,6 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
 
 .rec-row-artwork-empty {
   background: #ececec;
-}
-
-/* min-width: 0 is what actually allows the text to shrink and ellipsize inside
-   a flex row. Without it the body refuses to shrink below its content width. */
-.rec-row-body {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.rec-row-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 3px;
-  flex-wrap: wrap;
 }
 
 .rec-pill {
@@ -441,6 +440,34 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
 .rec-row-meta {
   font-size: 11px;
   color: #999;
+}
+
+/* §4c: the facts line, shared by all three card types (RecommendationCard,
+   OpenerRecord, HuntCard) as one unified geometry, even though each keeps
+   its own colour palette and copy. Replaces the old header arrangement
+   (pill, distant tag, and year/genre all crowded together above the
+   title): year/genre now sits on the left, the connection tag on the
+   right, one row.
+
+   min-height is the load-bearing property here, not the flex properties
+   above it. OpenerRecord.jsx renders this same row with an empty tag slot
+   (D-025 -- no claim, so no tag) and no min-height would mean nothing on
+   either side some of the time, collapsing the row to 0 and pulling the
+   actions row up to sit directly under the artist line -- exactly the
+   inconsistent spacing this change exists to prevent. Holding the line
+   open is the point, not a side effect. */
+.rec-stamp {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 27px;
+}
+
+.rec-stamp-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .rec-row-title {
@@ -490,13 +517,20 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   text-decoration: underline;
 }
 
-/* Actions collapse from two stacked wrapped text buttons ("Apple / Music") into
-   three compact icon targets. */
+/* §4c: this is now the ONLY .rec-row-actions rule -- the full-width,
+   natural-DOM-order treatment §4b built as a mobile-only fix is the
+   permanent geometry at every width, not something that only applies
+   below 700px. That fix's own reasoning (star, 30s, Apple, Spotify is
+   already the DOM order; a contiguous left-aligned row with one gap
+   between every control, no split-off group) applies identically on a
+   1200px screen once the row sits at the card's own full width instead of
+   beside a wide text column. */
 .rec-row-actions {
-  flex: 0 0 auto;
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  min-width: 0;
 }
 
 .rec-row-play {
@@ -520,6 +554,26 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
 .rec-row-links {
   display: flex;
   gap: 6px;
+}
+
+/* §4c: hunt cards have no preview, so their three actual destinations are
+   the row's equal-weight middle -- promoted here from a mobile-only rule
+   (Brief N-1 / K3a) to the permanent base geometry, same reasoning as
+   .rec-row-actions above: the action row is now full-width at every
+   breakpoint, not just below 700px, so a plain flex row of three icons
+   would sit clustered on the left with dead space to its right on a wide
+   card. The grid spreads them across the same width the row actually has. */
+.rec-row-hunt .rec-row-links {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.rec-row-hunt .rec-row-links .rec-icon-link {
+  width: 100%;
 }
 
 .rec-icon-link {
@@ -553,60 +607,13 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
     max-width: 100%;
   }
 
-  /* Stack the row: art + text on top, actions below. Keeping three icon
-     buttons in a horizontal row on a 360px screen would crush the title. */
-  .rec-row {
-    flex-wrap: wrap;
-  }
+  /* §4c: the card is a single column at every width now (see the base
+     .rec-row rule above), so the flex-wrap/action-row/hunt-grid/novelty-
+     margin rules that used to live here (Brief N-1, K3a, §4b) are gone --
+     not overridden, removed, because there is no longer a row-vs-stacked
+     distinction between desktop and mobile for this to switch between.
 
-  /* Brief N, N-1. Was a 3-column fr grid (Brief K3a). Two failures: sparse
-     auto-placement pushed .rec-row-play to a second row because
-     .rec-row-save appears first in the DOM but claims column 2; and
-     padding-left: 68px squeezed the third column narrower than its own
-     contents, so Spotify overflowed the card. Flex with natural widths
-     cannot overflow and does not care about DOM order.
-
-     §4b: the order declarations from N-1 and .rec-row-links's margin-left:
-     auto are both gone now. Star, 30s, Apple, Spotify -- the order asked
-     for -- IS the DOM order (save, play, links; RecommendationCard.jsx),
-     so no `order` overrides are needed at all, and the auto margin that
-     pushed .rec-row-links to the row's right edge read as a gap splitting
-     one row of four controls into "two controls, then a separate group of
-     services" -- not the intent. Natural flow: one contiguous, left-
-     aligned row, a single gap between every control. */
-  .rec-row-actions {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding-left: 0;
-    min-width: 0;
-  }
-
-  /* Hunt cards: same container, but no preview, and their three
-     destinations are equals. */
-  .rec-row-hunt .rec-row-links {
-    flex: 1 1 auto;
-    min-width: 0;
-    margin-left: 10px;
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-  }
-
-  .rec-row-hunt .rec-row-links .rec-icon-link {
-    width: 100%;
-  }
-
-  /* N-1 leaves .rec-row-actions's padding-left at 0, but this alignment
-     reference to the OLD 68px value is now stale -- flagged, not silently
-     changed, since N-1 didn't ask for it and .rec-novelty-row sits below
-     .rec-row-actions, not inside it. */
-  .rec-novelty-row {
-    margin-left: 68px; /* same alignment as .rec-row-actions above */
-  }
-
-  /* Brief M, P0-2. The clamp hid the exact sentence D-022 exists to
+     Brief M, P0-2. The clamp hid the exact sentence D-022 exists to
      deliver, on the only screen most testers touch. No truncation, no
      Read more toggle on mobile -- isOverflowing (RecommendationCard.jsx)
      is computed from actual DOM overflow, so removing the clamp here also
@@ -712,10 +719,13 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   max-width: 560px;
 }
 
+/* §4c: column, same geometry as .rec-row (see its own comment above) --
+   the opener moves from 52px beside the text to 92px above it, same as
+   the other two card types. */
 .opener-record {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 4px;
   padding: 10px 12px;
   border: 1px solid #2c2f3a;
   border-radius: 10px;
@@ -724,9 +734,10 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
 }
 
 .opener-record-art {
-  flex: 0 0 auto;
-  width: 48px;
-  height: 48px;
+  width: 92px;
+  height: 92px;
+  flex-shrink: 0;
+  align-self: flex-start;
   border-radius: 5px;
   object-fit: cover;
   display: block;
@@ -734,13 +745,6 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
 
 .opener-record-art-empty {
   background: #262932;
-}
-
-/* min-width: 0 is what allows the text to shrink inside a flex row. Without it
-   the body refuses to go below its content width and pushes the row wide. */
-.opener-record-body {
-  flex: 1 1 auto;
-  min-width: 0;
 }
 
 .opener-record-title {
@@ -765,17 +769,24 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   word-break: normal;
 }
 
+/* §4c: no top margin -- this now sits inside .rec-stamp (a flex row) as a
+   direct sibling of .rec-stamp-tag, not stacked block-on-block under the
+   artist line the way it used to be. .rec-stamp's own gap from the artist
+   line above it is what provides spacing now. */
 .opener-record-meta {
   font-size: 11px;
   color: #71747f;
-  margin: 3px 0 0 0;
 }
 
+/* §4c: full-width, natural DOM order, same as .rec-row-actions -- see that
+   rule's own comment for why this is the permanent geometry at every
+   width now rather than a mobile-only treatment. */
 .opener-record-actions {
-  flex: 0 0 auto;
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  min-width: 0;
 }
 
 .opener-record-play {
@@ -819,28 +830,11 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
     max-width: 100%;
   }
 
-  /* Brief N, N-2. .rec-row got flex-wrap on mobile and .opener-record never
-     did, so the opener stayed a rigid 3-column row: 48px art, a body
-     squeezed to ~68px, and four non-shrinking buttons. That width is why
-     break-word (Brief M, P0-7) still broke ordinary words -- at 68px they
-     legitimately do not fit. Deliberately NOT merged with .rec-row's own
-     mobile rules: D-025 keeps these components separate on purpose, they
-     only share layout behaviour now, not identity. */
-  .opener-record {
-    flex-wrap: wrap;
-  }
-  .opener-record-body {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-  .opener-record-actions {
-    width: 100%;
-    margin-top: 8px;
-    gap: 10px;
-  }
-  .opener-record-actions .opener-record-link:last-child {
-    margin-left: auto;
-  }
+  /* §4c: the flex-wrap/body/actions/margin-auto rules that used to live
+     here (Brief N-2) are gone, not overridden -- the opener is a single
+     column with a full-width action row at every width now (see the base
+     .opener-record / .opener-record-actions rules above), so there is no
+     longer a mobile-specific shape for this card to switch into. */
 }
 
 /* --- Signal acquisition ---
@@ -1186,9 +1180,17 @@ body {
    error state, which is exactly the wrong register. Only the artwork slot
    and the added line are distinct. */
 
+/* §4c: 92px, matching .rec-row-artwork/.opener-record-art -- .hunt-chart
+   below sizes itself to 74% of whichever box it's actually in, so it scales
+   up proportionally with no change of its own needed. width/height override
+   the shared .rec-row-artwork rule's own 92px (redundant in value, kept
+   explicit since this element is a div, not the img that rule mainly
+   targets, and flex-shrink/align-self still need restating for it). */
 .rec-row-artwork-hunt {
-  width: 56px;
-  height: 56px;
+  width: 92px;
+  height: 92px;
+  flex-shrink: 0;
+  align-self: flex-start;
   border-radius: 2px;
   border: 1px solid rgba(0, 0, 0, 0.18);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);

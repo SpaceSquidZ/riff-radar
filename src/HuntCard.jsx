@@ -127,27 +127,36 @@ export default function HuntCard({ rec, onOutboundClick, isSaved, onToggleSave, 
   return (
     <div className="rec-card">
       <div className="rec-row rec-row-hunt">
-        <div className="rec-row-art">
-          <div className="rec-row-artwork rec-row-artwork-hunt" aria-hidden="true">
-            <HuntChart />
-          </div>
+        <div className="rec-row-artwork rec-row-artwork-hunt" aria-hidden="true">
+          <HuntChart />
         </div>
 
-        <div className="rec-row-body">
-          <div className="rec-row-header">
+        <p className="rec-row-title">{rec.track}</p>
+        <p className="rec-row-artist">{rec.artist}</p>
+
+        {rec.explanation && <p className="rec-row-explanation">{rec.explanation}</p>}
+
+        {/* Not a badge, not a warning -- lead, not fault. Merged into one
+            aside (§4c) rather than a fourth text block: the second sentence
+            is the honest note about what "worth the dig" actually gets you
+            -- a search, not a delivery -- so it belongs right where the
+            first sentence already sets that register, not bolted on as its
+            own separate line. */}
+        <p className="rec-row-hunt-line">
+          This one I can't pull in clean. It's out there though — worth the dig.
+          These are searches, not links: a record this far out may not be on
+          any of them.
+        </p>
+
+        {/* §4c: the facts line, same .rec-stamp as the other two card types.
+            Hunt's own tag ("Worth the dig") moves out of the header and
+            into the right side here, same slot RecommendationCard.jsx uses
+            for its connection label. */}
+        <div className="rec-stamp">
+          <span className="rec-row-meta">{metaLine}</span>
+          <div className="rec-stamp-tag">
             <span className="rec-pill rec-pill-hunt">Worth the dig</span>
-            {metaLine && <span className="rec-row-meta">{metaLine}</span>}
           </div>
-
-          <p className="rec-row-title">{rec.track}</p>
-          <p className="rec-row-artist">{rec.artist}</p>
-
-          {rec.explanation && <p className="rec-row-explanation">{rec.explanation}</p>}
-
-          {/* Not a badge, not a warning -- lead, not fault. */}
-          <p className="rec-row-hunt-line">
-            This one I can't pull in clean. It's out there though — worth the dig.
-          </p>
         </div>
 
         <div className="rec-row-actions">
