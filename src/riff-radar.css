@@ -607,6 +607,66 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
     max-width: 100%;
   }
 
+  /* §4c follow-up: the four-control fill the unification spec called for
+     and never actually landed -- this is the real fix for the empty
+     bottom-right corner on a phone, not the desktop cap-and-space-between
+     attempt this replaces (reverted: desktop's geometry needed nothing).
+
+     .rec-row-links dissolves via display: contents so its two icons
+     (Apple, Spotify) stop counting as ONE flex child of .rec-row-actions
+     and become two of the four direct children the row actually has --
+     without this, the wrapper itself is one of three children (save,
+     play, wrapper) and gets a third of the row while its own two icons
+     split that third in half, nowhere near equal to save or play.
+     display: contents removes the wrapper from layout entirely (no box of
+     its own) while leaving its children in the DOM exactly where they
+     were, which is what makes this a pure CSS fix -- no JSX change. */
+  .rec-row-links {
+    display: contents;
+  }
+
+  .rec-row-actions > *,
+  .rec-row-actions .rec-row-links > *,
+  .opener-record-actions > * {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 44px;
+  }
+
+  /* BUG THIS FIXES (found by measuring at 390px, not by reading): four of
+     the six control classes have their own width/height set in rules
+     defined LATER in this file than the block above -- .rec-row-save
+     (Save buttons section), .opener-record-save (same section), and
+     .opener-record-play / .opener-record-link (their own base rules,
+     never moved when the "paper redesign" and preview-badge layers were
+     added elsewhere). Same specificity as the rule above (one class each),
+     same property, later in the file -- cascade order handed height to
+     THEM. Measured: save buttons rendered 30px tall, opener's play/link
+     buttons 32-34px, against 44-46px on every sibling that wasn't
+     shadowed this way. .rec-row-play and .rec-icon-link happen to be
+     defined earlier in the file and were never actually broken -- this
+     isn't a pattern affecting "the save buttons" or "the opener" as a
+     category, it's whichever specific rule happens to sit below this
+     block, which is exactly why relying on source order here is fragile.
+     The fix is a two-class compound selector (specificity 0,2,0) for each
+     of the four, which wins the cascade outright regardless of position,
+     rather than patching whichever one the next edit happens to shadow. */
+  .rec-row-actions > .rec-row-save,
+  .opener-record-actions > .opener-record-save,
+  .opener-record-actions > .opener-record-play,
+  .opener-record-actions > .opener-record-link {
+    height: 44px;
+  }
+
+  /* Hunt: drop the 3-column grid (Brief N-1 / K3a, promoted to the base
+     rule in §4c) entirely on mobile. Its three links become three of the
+     row's four equal flex children the same way Apple/Spotify do above,
+     rather than a nested grid subdividing whatever space the row's flex
+     layout already gave the (now-dissolved) wrapper. */
+  .rec-row-hunt .rec-row-links {
+    display: contents;
+  }
+
   /* §4c: the card is a single column at every width now (see the base
      .rec-row rule above), so the flex-wrap/action-row/hunt-grid/novelty-
      margin rules that used to live here (Brief N-1, K3a, §4b) are gone --
