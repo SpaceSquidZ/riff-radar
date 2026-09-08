@@ -137,15 +137,21 @@ export default function HuntCard({ rec, onOutboundClick, isSaved, onToggleSave, 
         {rec.explanation && <p className="rec-row-explanation">{rec.explanation}</p>}
 
         {/* Not a badge, not a warning -- lead, not fault. Merged into one
-            aside (§4c) rather than a fourth text block: the second sentence
+            aside (§4d) rather than a fourth text block: the second sentence
             is the honest note about what "worth the dig" actually gets you
             -- a search, not a delivery -- so it belongs right where the
             first sentence already sets that register, not bolted on as its
-            own separate line. */}
+            own separate line.
+            Second sentence is verbatim per §4d brief -- three buttons read
+            as three promises, and for a genuinely rare record they may all
+            come back empty. That's not a failure, it's the point, but it
+            has to be said or the dead end reads as broken instead of as
+            the thing the product is selling. Ship this line regardless of
+            whether the MusicBrainz eligibility check below ships. */}
         <p className="rec-row-hunt-line">
           This one I can't pull in clean. It's out there though — worth the dig.
-          These are searches, not links: a record this far out may not be on
-          any of them.
+          These are searches, not links. A record this far out may not be on
+          any of them — that is what makes it a dig.
         </p>
 
         {/* §4c: the facts line, same .rec-stamp as the other two card types.
