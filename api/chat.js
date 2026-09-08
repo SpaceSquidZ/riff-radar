@@ -44,7 +44,7 @@ import {
 import { logEvent } from '../src/supabaseClient.js';
 import { validateOneTrack, lookupTrackFacts, titlesMatch } from './lib/validateTracks.js';
 import { flushCacheWrites } from './lib/itunesCache.js';
-import { getCandidatePool, resolveSeedArtist } from './lib/lastfm.js';
+import { getCandidatePool, resolveSeedArtist, verifyRecordingViaMusicBrainz } from './lib/lastfm.js';
 
 export const config = {
   maxDuration: 60,
@@ -752,11 +752,25 @@ const MAX_WIDE_SURFACED = 1;
 // is needed there -- the hunt card's promise is that the record is out
 // there under the recommended name, and a misattributed candidate is
 // evidence it isn't.
+//
+// §4d: 'unverifiable' joins the set for the same reclassify-in-place reason
+// as 'misattributed'. A 'not_found' candidate that selectHuntCard below
+// sends to MusicBrainz and gets no recording match back is no longer just
+// "Apple Music has nothing" -- it's "Apple Music AND MusicBrainz have
+// nothing," which is far more consistent with fabricated than with
+// obscure, exactly the distinction a hunt card's "worth the dig" claim
+// depends on. It never arrives as validateOneTrack's own output (that
+// function only ever returns 'not_found'/'wrong_title'/'unconfirmed'/
+// 'misattributed'/ok) -- selectHuntCard mutates a candidate's
+// itunesValidation from 'not_found' to 'unverifiable' in place once
+// MusicBrainz has answered and found nothing, same mechanism N-5 already
+// established for 'misattributed'.
 const UNSHIPPABLE_VALIDATION = new Set([
   'not_found',
   'wrong_title',
   'unconfirmed',
   'misattributed',
+  'unverifiable',
 ]);
 
 function isUnshippable(candidate) {
@@ -866,23 +880,67 @@ function selectSurfaced(validated, priorArtists = [], sourceTrack = null, reques
   // every searched store -- fits the premise, which the whole feature is
   // built on the measured 32% Apple Music hit rate for underground rap.
   //
-  // At most one, ever, per the brief: two hunt cards reads as a broken
-  // product, one reads as a lead. Only added when stages 1-2 left room --
-  // never on top of three already-playable cards.
-  let huntAdded = false;
-  if (surfaced.length < MAX_SURFACED) {
-    for (const c of validated) {
-      if (huntAdded) break;
-      if (c.itunesValidation !== 'not_found') continue;
-      const artistKey = normalizeArtistKey(c.artist);
-      if (isExemptRepeat(artistKey, takenArtists, requestedKeys)) continue;
-      surfaced.push({ ...c, isHunt: true });
-      takenArtists.add(artistKey);
-      huntAdded = true;
-    }
-  }
+  // §4d moved the actual hunt-card pick out of this function and into the
+  // async selectHuntCard below -- it needs a MusicBrainz round-trip, and
+  // this function stays synchronous on purpose (everything above is a pure,
+  // cheap pass every branch depends on). takenArtists and requestedKeys are
+  // returned so the caller can run that second pass with the same
+  // accumulated no-repeat state stages 1-2 already built.
+  return { surfaced, skipped, stage, takenArtists, requestedKeys };
+}
 
-  return { surfaced, skipped, stage };
+/**
+ * §4d. The hunt-card slot: a second, async pass over the same 'not_found'
+ * candidates selectSurfaced above declined to surface, now gated on
+ * MusicBrainz actually confirming a matching recording exists.
+ *
+ * BUG THIS REPLACES: a hunt card's only evidence used to be "iTunes has
+ * nothing for this," which is equally consistent with "obscure" and with
+ * "does not exist" -- Groove's failure mode when the candidate pool runs
+ * thin is inventing a title (see lastfm.js's header, and 'wrong_title'/
+ * 'misattributed' above), and 'not_found' alone cannot tell those apart.
+ * A recording match on MusicBrainz -- a second, independent catalogue,
+ * no key requirement, recording-level data -- can.
+ *
+ * Checks only the not_found candidates actually being considered for THIS
+ * turn's one hunt slot, not the full set: MusicBrainz's 1 req/sec courtesy
+ * limit makes checking every not_found candidate (typically several per
+ * turn) cost multiple seconds against a turn that already takes twelve. In
+ * practice this rarely goes past the first one or two, since only one hunt
+ * slot is ever open (D-037: two hunt cards reads as a broken product).
+ *
+ * Fails closed in both directions:
+ *   - MusicBrainz answers and finds nothing ('unverifiable'): that
+ *     candidate's itunesValidation is reclassified in place -- same
+ *     mechanism N-5 already established for 'misattributed' -- and the
+ *     next not_found candidate in rank order is tried.
+ *   - MusicBrainz does not answer at all ('unconfirmed' -- network error
+ *     or its own 2s timeout): the WHOLE hunt slot is abandoned for this
+ *     turn, not just that one candidate. A hunt card issued because the
+ *     check couldn't run is a hunt card issued on faith, which is exactly
+ *     what this exists to prevent -- and if MusicBrainz didn't answer once
+ *     this turn, there's no reason to expect it will for the next
+ *     candidate either.
+ *
+ * @param {Array} validated - same array passed to selectSurfaced; mutated
+ *   in place when a candidate is reclassified to 'unverifiable'.
+ * @param {Set<string>} takenArtists - accumulated state from selectSurfaced.
+ * @param {Set<string>} requestedKeys - accumulated state from selectSurfaced.
+ * @returns {Promise<object|null>} the confirmed candidate, or null if none
+ *   confirmed / MusicBrainz did not answer.
+ */
+async function selectHuntCard(validated, takenArtists, requestedKeys) {
+  for (const c of validated) {
+    if (c.itunesValidation !== 'not_found') continue;
+    const artistKey = normalizeArtistKey(c.artist);
+    if (isExemptRepeat(artistKey, takenArtists, requestedKeys)) continue;
+
+    const status = await verifyRecordingViaMusicBrainz(c.track, c.artist);
+    if (status === 'unconfirmed') return null;
+    if (status === 'confirmed') return c;
+    c.itunesValidation = 'unverifiable';
+  }
+  return null;
 }
 
 function logEventSafe(sessionId, eventType, payload, isTester = false) {
@@ -1301,7 +1359,20 @@ export default async function handler(req, res) {
       const priorArtists = previousRecommendations.map((r) => r.artist).filter(Boolean);
       const selection = selectSurfaced(validated, priorArtists, sourceTrack, requestedArtists);
       surfaced = selection.surfaced;
-      const { skipped, stage } = selection;
+      const { skipped, stage, takenArtists, requestedKeys } = selection;
+
+      // §4d: the hunt slot needs a MusicBrainz round-trip, so it runs as a
+      // second, async pass after selectSurfaced's synchronous stages 1-2 --
+      // see selectHuntCard's own comment for why. Only attempted when
+      // stages 1-2 left room, same "never on top of three already-playable
+      // cards" rule the old inline version enforced.
+      if (surfaced.length < MAX_SURFACED) {
+        const huntCandidate = await selectHuntCard(validated, takenArtists, requestedKeys);
+        if (huntCandidate) {
+          surfaced.push({ ...huntCandidate, isHunt: true });
+          takenArtists.add(normalizeArtistKey(huntCandidate.artist));
+        }
+      }
 
       const failed = validated.filter(isUnshippable);
       // Brief B, Change 3: separated so both events below can report them
@@ -1321,6 +1392,12 @@ export default async function handler(req, res) {
       const misattributedCount = failed.filter(
         (r) => r.itunesValidation === 'misattributed'
       ).length;
+      // §4d's measurement ask, same counting pattern as misattributedCount
+      // above: how often selectHuntCard's MusicBrainz check reclassifies a
+      // 'not_found' candidate once it actually gets checked.
+      const unverifiableCount = failed.filter(
+        (r) => r.itunesValidation === 'unverifiable'
+      ).length;
 
       if (sessionId && failed.length > 0) {
         logEventSafe(
@@ -1338,6 +1415,7 @@ export default async function handler(req, res) {
             failed_count: failed.length,
             wrong_title_count: wrongTitleCount,
             misattributed_count: misattributedCount,
+            unverifiable_count: unverifiableCount,
             total_candidates: validated.length,
           },
           isTester
@@ -1436,6 +1514,7 @@ export default async function handler(req, res) {
             not_found_count: notFoundCount,
             wrong_title_count: wrongTitleCount,
             misattributed_count: misattributedCount,
+            unverifiable_count: unverifiableCount,
             types: candidates.map((c) => c.connectionType),
             tiers: candidates.map((c) => c.tier),
             distant_count: candidates.filter((c) => c.distant).length,
@@ -1467,6 +1546,7 @@ export default async function handler(req, res) {
           // harness (replay.mjs, run where Supabase creds aren't available)
           // couldn't recover them. Not otherwise used by this line's readers.
           ` not_found=${notFoundCount} wrong_title=${wrongTitleCount} misattributed=${misattributedCount}` +
+          ` unverifiable=${unverifiableCount}` +
           ` pool_size=${candidatePool?.artists?.length || 0} seed=${seedArtist || 'none'}`
       );
     }

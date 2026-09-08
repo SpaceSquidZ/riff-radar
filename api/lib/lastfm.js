@@ -220,6 +220,142 @@ async function resolveSimilarViaMbid(artistName) {
   return { raw, mbid };
 }
 
+// §4d. A hunt card's entire claim is "this record is out there and worth the
+// dig." Until now the only evidence behind that claim was iTunes returning
+// nothing for it, which is equally consistent with "obscure" and with "does
+// not exist" -- iTunes 404s on both. MusicBrainz has recording-level data and
+// no key requirement, and Groove's failure mode when the candidate pool runs
+// thin is exactly fabricating a title (see this file's own header, and
+// validateTracks.js's 'wrong_title'/'misattributed' cases) -- a track absent
+// from BOTH Apple Music and MusicBrainz is far more likely invented than
+// underground. A track absent from Apple but present in MusicBrainz is
+// exactly what a hunt card should be about.
+//
+// Recording search, not artist search: this asks "does a recording named
+// this exist, credited to this artist," the direct question a hunt card is
+// making a claim about -- resolveMbidViaMusicBrainz above answers a
+// different question (does this artist exist at all) for a different
+// caller (getCandidatePool).
+//
+// Same courtesy-limit posture as the artist search above: this only ever
+// runs on the one or two candidates actually about to surface as a hunt
+// card THIS turn, never on the full not_found set (chat.js enforces that at
+// the call site) -- checking all six would cost up to five sequential
+// requests against MusicBrainz's 1 req/sec limit and add roughly five
+// seconds to a turn that already takes twelve.
+const MUSICBRAINZ_RECORDING_ROOT = 'https://musicbrainz.org/ws/2/recording';
+
+// MusicBrainz's own search relevance score (0-100) for how well a result
+// matches the query. Chosen conservatively: this gates a claim made to the
+// user ("worth the dig"), not an internal ranking, so a mediocre partial
+// match should fall to 'unverifiable' rather than 'confirmed'. Not yet
+// tuned against real hunt-eligible candidates -- see the §4d measurement
+// script, which runs before this threshold gates any actual selection
+// decision.
+const RECORDING_CONFIRM_SCORE = 90;
+
+// Asymmetric TTLs, same reasoning as itunes_cache's confirmed-vs-not_found
+// split: a confirmed recording does not un-exist, but MusicBrainz's own
+// database grows as contributors catalogue more of the underground --  a
+// genuinely rare recording that gets added next month should not stay
+// 'unverifiable' here for as long as a confirmed hit is trusted.
+const RECORDING_CONFIRMED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const RECORDING_UNVERIFIABLE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Only backslash and the closing quote can break the quoted phrase this is
+// interpolated into below; nothing else needs escaping inside a Lucene
+// quoted phrase.
+function escapeLuceneValue(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * Checks MusicBrainz's recording index for a match on `track` credited to
+ * `artist`. NEVER throws.
+ *
+ * Fails closed in both directions (§4d, explicit in the brief): a genuine
+ * miss and a MusicBrainz outage must both keep a hunt card from shipping,
+ * even though they are distinguished for logging --
+ *   'confirmed'    - a recording result matched both title and artist
+ *                     credit at or above RECORDING_CONFIRM_SCORE. Cached 30
+ *                     days.
+ *   'unverifiable' - MusicBrainz answered normally; nothing cleared the
+ *                     bar. This is the status a genuine miss produces, and
+ *                     it is also fed back into api/chat.js's
+ *                     itunesValidation as the more specific replacement for
+ *                     'not_found', same reclassify-in-place precedent as
+ *                     'misattributed' (N-5). Cached 7 days.
+ *   'unconfirmed'  - network error, non-2xx, or the 2s timeout fired. NEVER
+ *                     cached -- identical rule to validateTracks.js's own
+ *                     'unconfirmed': a transient network condition is not a
+ *                     fact about the track, and caching it would let one bad
+ *                     MusicBrainz second silently blackball a real
+ *                     recording for a week.
+ *
+ * @param {string} track
+ * @param {string} artist
+ * @returns {Promise<'confirmed'|'unverifiable'|'unconfirmed'>}
+ */
+export async function verifyRecordingViaMusicBrainz(track, artist) {
+  if (!track || !artist) return 'unconfirmed';
+
+  const cacheKey = `mb_recording:${normalizeKey(track)}::${normalizeKey(artist)}`;
+  const cached = await cacheGet(cacheKey);
+  if (cached) return cached;
+
+  const url = new URL(MUSICBRAINZ_RECORDING_ROOT);
+  url.searchParams.set(
+    'query',
+    `recording:"${escapeLuceneValue(track)}" AND artist:"${escapeLuceneValue(artist)}"`
+  );
+  url.searchParams.set('fmt', 'json');
+  url.searchParams.set('limit', '5');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MUSICBRAINZ_TIMEOUT_MS);
+
+  let result;
+  try {
+    const res = await fetch(url.toString(), {
+      headers: { 'User-Agent': MUSICBRAINZ_USER_AGENT },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      console.warn(
+        `[lastfm] MusicBrainz recording search returned ${res.status} for "${track}" / "${artist}"`
+      );
+      return 'unconfirmed';
+    }
+    const json = await res.json();
+    const recordings = Array.isArray(json?.recordings) ? json.recordings : [];
+    const artistKey = normalizeKey(artist);
+    const matched = recordings.some((rec) => {
+      const score = Number(rec?.score);
+      if (!Number.isFinite(score) || score < RECORDING_CONFIRM_SCORE) return false;
+      const credits = Array.isArray(rec?.['artist-credit']) ? rec['artist-credit'] : [];
+      return credits.some((c) => normalizeKey(c?.artist?.name || c?.name) === artistKey);
+    });
+    result = matched ? 'confirmed' : 'unverifiable';
+  } catch (err) {
+    // AbortError on timeout lands here too, same as resolveMbidViaMusicBrainz.
+    console.warn(
+      `[lastfm] MusicBrainz recording search failed for "${track}" / "${artist}":`,
+      err?.message || err
+    );
+    return 'unconfirmed';
+  } finally {
+    clearTimeout(timer);
+  }
+
+  cacheSet(
+    cacheKey,
+    result,
+    result === 'confirmed' ? RECORDING_CONFIRMED_TTL_MS : RECORDING_UNVERIFIABLE_TTL_MS
+  );
+  console.log(`[lastfm] MusicBrainz recording check "${track}" / "${artist}" -> ${result}`);
+  return result;
+}
+
 function tierHint(listeners) {
   if (listeners == null) return null;
   if (listeners > WIDE_THRESHOLD) return 'wide';
