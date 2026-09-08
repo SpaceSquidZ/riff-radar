@@ -6,6 +6,7 @@ import HuntCard from './HuntCard';
 import OpenerRecord from './OpenerRecord';
 import InputTrackCard from './InputTrackCard';
 import CratePanel from './CratePanel';
+import GrooveBackstory from './GrooveBackstory';
 import { getSessionId } from './sessionId';
 import {
   initSession,
@@ -167,6 +168,10 @@ export default function App() {
   const [crate, setCrate] = useState(() => readCrate());
   const [crateOpen, setCrateOpen] = useState(false);
   const [lastRemoved, setLastRemoved] = useState(null);
+  // §4c (backstory). An overlay, not a route -- the conversation stays
+  // mounted underneath regardless of this, so opening/closing it never
+  // touches messages/sourceTrack/anything else here.
+  const [backstoryOpen, setBackstoryOpen] = useState(false);
   // Counts only USER messages. Arc beats and pool asks are suppressed until
   // this reaches 2, so turn one is just the opener and one real exchange.
   // Derived from restored messages on resume, not reset to 0 -- a refresh on
@@ -850,7 +855,20 @@ export default function App() {
   return (
     <>
       <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '1.5rem' }}>
-        <h1 className="app-logo" ref={wordmarkRef}>Riff Radar</h1>
+        <div className="app-header">
+          <h1 className="app-logo" ref={wordmarkRef}>Riff Radar</h1>
+          {/* §4c (backstory). Text only, low contrast, same monospace label
+              register as the status lines (.opener-status-line) -- the
+              only entry point to the overlay below, permanently present,
+              never replaced by a different affordance after first use. */}
+          <button
+            type="button"
+            className="backstory-trigger"
+            onClick={() => setBackstoryOpen(true)}
+          >
+            About Groove
+          </button>
+        </div>
 
         <div className="app-layout">
           <div className="app-layout-content-col">
@@ -1122,6 +1140,8 @@ export default function App() {
         wordmarkRef={wordmarkRef}
         inputAreaRef={chatInputRowRef}
       />
+
+      <GrooveBackstory open={backstoryOpen} onClose={() => setBackstoryOpen(false)} />
 
       {/* §4a: one field, one designed moment. Consent and the status-label
           sequence used to be two independently-styled things (a light scrim

@@ -1544,11 +1544,50 @@ body {
   margin: 0 auto;
 }
 
-/* The wordmark sits with the column rather than at the page edge, so the whole
-   thing reads as one object. */
-.app-logo {
+/* The wordmark sits with the column rather than at the page edge, so the
+   whole thing reads as one object. Wrapped in .app-header (§4c, backstory)
+   alongside the "About Groove" trigger -- the wrapper now owns the
+   centering/max-width/bottom-margin this rule used to carry alone. */
+.app-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
   max-width: 680px;
   margin: 0 auto 1.25rem auto;
+}
+
+.app-logo {
+  margin: 0;
+}
+
+/* §4c (backstory). Text only, low contrast, same monospace label register
+   as .opener-status-line -- this is the one permanent, always-visible
+   entry point to the backstory overlay. No re-open affordance is needed
+   beyond this: closing the overlay never spawns a second way in, since
+   this was never hidden or replaced to begin with.
+
+   #8a8478, not the cooler #6f7380 this started as: warm, matching the
+   label register's own #6f6a5c (.opener-status-line etc.) rather than
+   reading as a mismatched cool grey against it, and it clears the 4.5:1
+   small-text contrast minimum against this page's #16171d background --
+   verified directly (WCAG relative-luminance formula, not eyeballed):
+   #6f7380 measured 3.78:1, #8a8478 measures 4.81:1. */
+.backstory-trigger {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #8a8478;
+  cursor: pointer;
+}
+
+.backstory-trigger:hover {
+  color: #a49c8c;
 }
 
 /* The input matches the column exactly. A narrower input inside a wider column
@@ -2462,5 +2501,101 @@ body {
   .consent-drawer {
     width: 92vw;
     max-height: 88vh;
+  }
+}
+
+/* ===========================================================================
+   GROOVE BACKSTORY (§4c) -- Lore Bible v2.1, §0, locked text
+   ===========================================================================
+
+   An overlay over the conversation, not a route -- the chat column stays
+   mounted underneath (GrooveBackstory.jsx returns null when closed rather
+   than App.jsx conditionally rendering the whole tree, so there is nothing
+   here to remount). Unlike .opener-black-field (the opening sequence's
+   deliberately unlit surface), this is a normal dark scrim over a normal
+   dark room: the conversation is still legible if you look at the parts
+   the panel doesn't cover, which is the correct read for an optional
+   background page rather than a moment the product is staging.
+
+   Typography is the point of this section: this is the one place in the
+   product that is prose rather than interface, and it needs to read like
+   a page. Reading-measure max-width in ch (character-relative, unlike px)
+   is what keeps this ~60-68 characters per line regardless of font-size
+   changes elsewhere. Generous line-height and paragraph margins, not a
+   wall of text -- .rec-row-explanation's tight 1.45 line-height is
+   correct for a card caption and wrong for a page meant to be read. */
+.backstory-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 65;
+  background: rgba(10, 10, 14, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.backstory-panel {
+  position: relative;
+  /* border-box so width: min(680px, 100%) is the actual rendered cap --
+     without it, this element's own padding below adds on top of 680px
+     (content-box, the default), landing closer to 745px in practice. The
+     reading measure itself doesn't depend on this (.backstory-body's own
+     max-width: 64ch governs that regardless of how wide this box is), but
+     the number in this rule should mean what it says. */
+  box-sizing: border-box;
+  width: min(680px, 100%);
+  max-height: 84vh;
+  overflow-y: auto;
+  background: #1a1c23;
+  border: 1px solid #34363f;
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  padding: 40px 32px;
+}
+
+.backstory-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: transparent;
+  border: none;
+  color: #8a8d99;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.backstory-close:hover {
+  color: #e8e8ea;
+}
+
+.backstory-body {
+  max-width: 64ch;
+  margin: 0 auto;
+  color: #d8d3c6;
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+.backstory-body p {
+  margin: 0 0 1.2em 0;
+}
+
+.backstory-body p:last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 700px) {
+  .backstory-overlay {
+    padding: 0;
+  }
+  .backstory-panel {
+    width: 100%;
+    max-height: 100%;
+    height: 100%;
+    border-radius: 0;
+    padding: 32px 20px;
   }
 }
