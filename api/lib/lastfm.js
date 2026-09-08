@@ -137,6 +137,36 @@ const MUSICBRAINZ_TIMEOUT_MS = 2000;
 // alias fact does not go stale the way a similar-artist ranking can.
 const MBID_CACHE_TTL_MS = 20 * 365 * 24 * 60 * 60 * 1000;
 
+// §4d follow-up (08 Sep 2026). This file's two MusicBrainz callers --
+// resolveMbidViaMusicBrainz above and verifyRecordingViaMusicBrainz below --
+// share one host and one 1 req/sec courtesy limit, and neither paced itself
+// against the other. Within a single turn, selectHuntCard in api/chat.js can
+// call verifyRecordingViaMusicBrainz two or three times in a row for
+// different not_found candidates, and measured MusicBrainz round-trips run
+// well under a second -- so those calls landed roughly 150ms apart, not
+// 1000ms, self-inflicting some fraction of the 503s/timeouts that then
+// tripped the fail-closed abort in selectHuntCard. The 08 Sep measurement
+// script paced its own external calls at 1.1s and still saw 17%
+// unconfirmed; the unpaced runtime path was therefore doing WORSE than that
+// figure, not better, since it wasn't paced at all.
+//
+// This is module-scope state, so it only paces calls made within one warm
+// serverless invocation -- it cannot see, and does not attempt to
+// coordinate with, concurrent invocations running on other instances. That
+// does not make the deployment globally 1-req/sec compliant. It stops the
+// actual observed offender: one turn hammering MusicBrainz with its own
+// sequential lookups.
+let lastMusicBrainzCallAt = 0;
+const MUSICBRAINZ_MIN_INTERVAL_MS = 1100;
+
+async function paceMusicBrainzCall() {
+  const remaining = MUSICBRAINZ_MIN_INTERVAL_MS - (Date.now() - lastMusicBrainzCallAt);
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
+  lastMusicBrainzCallAt = Date.now();
+}
+
 /**
  * Resolves `artistName` to a MusicBrainz artist MBID via a search query.
  * NEVER throws. Returns null on any failure: no results, network error,
@@ -147,6 +177,8 @@ const MBID_CACHE_TTL_MS = 20 * 365 * 24 * 60 * 60 * 1000;
  * @returns {Promise<{mbid: string, resolvedName: string}|null>}
  */
 async function resolveMbidViaMusicBrainz(artistName) {
+  await paceMusicBrainzCall();
+
   const url = new URL(MUSICBRAINZ_ROOT);
   url.searchParams.set('query', artistName);
   url.searchParams.set('fmt', 'json');
@@ -302,6 +334,8 @@ export async function verifyRecordingViaMusicBrainz(track, artist) {
   const cacheKey = `mb_recording:${normalizeKey(track)}::${normalizeKey(artist)}`;
   const cached = await cacheGet(cacheKey);
   if (cached) return cached;
+
+  await paceMusicBrainzCall();
 
   const url = new URL(MUSICBRAINZ_RECORDING_ROOT);
   url.searchParams.set(
