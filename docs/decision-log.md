@@ -409,6 +409,39 @@ script or romanization different from what the model reports will fail corrobora
 lose the seed. Cost is an unseeded turn, which is the status quo. Rejection logging added so
 UAT traffic measures the rate.
 
+### D-046 · Hunt cards require MusicBrainz confirmation — **CLOSED**
+
+**Decided:** 08 Sep 2026
+
+A hunt card claims a record exists and is worth pursuing. Until now the only evidence
+behind that claim was that Apple Music returned nothing, which is equally consistent with
+"obscure" and with "invented."
+
+**Measured, 08 Sep, against 219 historical `itunes_validation_failed` events (100 of 354
+distinct `not_found` pairs sampled, paced at 1.1s):** 9 confirmed, 74 absent, 17 no answer
+(MusicBrainz outage). **Confirmation rate 10.8% of the 83 pairs that got an answer.**
+
+Caveats on that figure: MusicBrainz coverage of the genuinely obscure is good but not
+complete, so this is an upper bound on fabrication rather than a measured fabrication rate;
+the sample predates N-5's misattribution filter; the match threshold was spot checked on two
+cases. Directionally it is unambiguous.
+
+**Decision:** a candidate becomes hunt-eligible only on MusicBrainz confirmation at the
+recording level. New validation status `unverifiable`, added to `UNSHIPPABLE_VALIDATION` and
+counted alongside `misattributed`.
+
+**Fail closed in both directions.** No confirmation means no hunt card. A MusicBrainz outage
+aborts the hunt slot entirely rather than issuing cards on faith. During measurement
+MusicBrainz returned no answer on 17% of calls, so this will suppress hunt cards for reasons
+unrelated to the track. That cost is accepted.
+
+**Cost accepted:** roughly 9% of `not_found` candidates now yield a hunt card, against
+effectively all of them before. Hunt cards become rare. This is the correct outcome: the
+supply of verifiable rarities is genuinely thin, and the previous abundance was fiction.
+
+**Not the root cause.** This is a downstream filter on a model that invents tracks. The
+upstream fix is grounding (D-042, D-045) and possibly a prompt rule. Deferred.
+
 ---
 
 ## Maintenance note
