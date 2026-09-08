@@ -386,21 +386,21 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   max-width: 680px;
 }
 
-/* §4c (unifies geometry across RecommendationCard, OpenerRecord, HuntCard --
-   see .rec-stamp further down for the fuller rationale): one column, not a
-   row. Artwork is its own row at the top, then title/artist/explanation/
-   aside/facts-line/actions stack directly as siblings -- no .rec-row-body
-   wrapper anymore, since a column layout has no shrink-to-fit problem for
-   its children the way a row did (that wrapper's whole job was min-width:
-   0, which a row-flex text sibling needs and a stretched column child
-   never did). Height varies only because the explanation varies; width,
-   element order and offsets are now identical across all three card
-   types, even though the three stay separate components (D-025) with
-   their own colours, copy, and text classes. */
+/* §4c (07 Sep 2026) unified element order across RecommendationCard,
+   OpenerRecord, and HuntCard -- artwork, title, artist, explanation,
+   aside, facts line (.rec-stamp further down), actions, all flat siblings
+   now, no .rec-row-body/.rec-row-art wrapper. That part stands at every
+   width and is NOT what this rule is about.
+
+   §4c follow-up (07 Sep, later the same day): §4c also made the card a
+   single column AT EVERY WIDTH, which was a phone layout shipped
+   everywhere -- correct up to 700px, wrong above it, worst on the opener
+   card (no explanation to fill the space a 680px-wide single column
+   leaves under a 56px... now 92px thumbnail). Column direction and the
+   92px artwork size are mobile-only from here on (see
+   @media (max-width: 700px) below); this base rule carries only what's
+   genuinely width-independent -- the card's surface, not its shape. */
 .rec-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
   background: #ffffff;
   border: 1px solid #e5e5e5;
   border-radius: 12px;
@@ -408,16 +408,7 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   color: #1a1a1a;
 }
 
-/* 92px, top left, its own row -- up from 56px. flex-shrink: 0 and
-   align-self: flex-start are both belt-and-suspenders here: a fixed
-   width/height already keeps stretch (the column's default cross-axis
-   behaviour) from resizing this, but stating the intent directly is
-   cheaper than relying on that fallback being obvious to the next reader. */
 .rec-row-artwork {
-  width: 92px;
-  height: 92px;
-  flex-shrink: 0;
-  align-self: flex-start;
   border-radius: 6px;
   object-fit: cover;
   display: block;
@@ -517,20 +508,18 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   text-decoration: underline;
 }
 
-/* §4c: this is now the ONLY .rec-row-actions rule -- the full-width,
-   natural-DOM-order treatment §4b built as a mobile-only fix is the
-   permanent geometry at every width, not something that only applies
-   below 700px. That fix's own reasoning (star, 30s, Apple, Spotify is
-   already the DOM order; a contiguous left-aligned row with one gap
-   between every control, no split-off group) applies identically on a
-   1200px screen once the row sits at the card's own full width instead of
-   beside a wide text column. */
+/* §4c follow-up: reverted to exactly what this was before 07 Sep 2026 --
+   recovered from fb4f94c (the last commit before that day's card work),
+   not re-authored from memory. §4c's "full width at every breakpoint"
+   promotion of this rule is gone; the desktop shape it displaced was
+   correct on its own terms and never needed fixing. Mobile gets its own
+   (different, deliberate) full-width fill treatment inside
+   @media (max-width: 700px) below. */
 .rec-row-actions {
-  width: 100%;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 0;
+  gap: 6px;
 }
 
 .rec-row-play {
@@ -556,26 +545,14 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   gap: 6px;
 }
 
-/* §4c: hunt cards have no preview, so their three actual destinations are
-   the row's equal-weight middle -- promoted here from a mobile-only rule
-   (Brief N-1 / K3a) to the permanent base geometry, same reasoning as
-   .rec-row-actions above: the action row is now full-width at every
-   breakpoint, not just below 700px, so a plain flex row of three icons
-   would sit clustered on the left with dead space to its right on a wide
-   card. The grid spreads them across the same width the row actually has. */
-.rec-row-hunt .rec-row-links {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin-left: 10px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-
-.rec-row-hunt .rec-row-links .rec-icon-link {
-  width: 100%;
-}
-
+/* Hunt's three-equal-destinations treatment for .rec-row-links lives only
+   in @media (max-width: 700px) below now -- §4c's promotion of it to an
+   unconditional base rule was exactly the "phone layout at every width"
+   problem this revert fixes: on a 680px desktop card it stretched three
+   icons across the row's full width instead of leaving them their
+   natural compact size beside a plain flex row. Desktop hunt uses the
+   same plain .rec-row-links as every other card now, same as before
+   07 Sep 2026. */
 .rec-icon-link {
   width: 34px;
   height: 34px;
@@ -600,11 +577,97 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   line-height: 1.55;
 }
 
+/* §4c follow-up: the horizontal shape recovered via grid, not re-authored
+   from memory -- artwork size, gap, and the rest of this file's desktop
+   geometry are read from fb4f94c (git show fb4f94c:src/riff-radar.css),
+   the last commit before 07 Sep's card-geometry work, not guessed at.
+   56px for .rec-row/.rec-row-hunt (was .rec-row-artwork's own width/height
+   pre-07-Sep), 48px for .opener-record (was .opener-record-art's).
+
+   Grid, not a reversion to the old flex row, because the DOM changed
+   underneath it: §4c's element-order unification (title, artist,
+   explanation, aside, facts line, actions -- all flat siblings now, no
+   .rec-row-body/.rec-row-art wrapper) means there is no longer a single
+   "body" element to place beside the artwork the way flex did before.
+   Grid places the artwork in column 1 spanning every row the OTHER
+   column's content generates, however many that is, without touching the
+   DOM at all -- .rec-row-artwork gets grid-row: 1 / -1, and everything
+   else just falls into column 2 in document order via ordinary grid
+   auto-placement. The facts line (.rec-stamp) needed nothing done to it
+   specifically; it's just one more :not(.rec-row-artwork) child. */
+@media (min-width: 701px) {
+  .rec-row,
+  .rec-row-hunt {
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    column-gap: 16px;
+    align-items: start;
+  }
+  /* grid-template-columns sizes the COLUMN; it does not size the element
+     inside it. Without an explicit width/height here the <img> falls back
+     to its own intrinsic size (whatever the actual artwork's pixel
+     dimensions are, not 56px) and .rec-row-artwork-hunt (a flex div with
+     no content-based height of its own) collapses toward 0 -- caught by
+     measuring at 1280px, where the artwork rendered at ~2px, not 56px. */
+  .rec-row-artwork {
+    width: 56px;
+    height: 56px;
+    grid-column: 1;
+    grid-row: 1 / -1;
+  }
+  .rec-row > :not(.rec-row-artwork) {
+    grid-column: 2;
+  }
+
+  .opener-record {
+    display: grid;
+    grid-template-columns: 48px 1fr;
+    column-gap: 16px;
+    align-items: start;
+  }
+  .opener-record-art {
+    width: 48px;
+    height: 48px;
+    grid-column: 1;
+    grid-row: 1 / -1;
+  }
+  .opener-record > :not(.opener-record-art) {
+    grid-column: 2;
+  }
+}
+
 /* --- Mobile --- */
 
 @media (max-width: 700px) {
   .rec-rows {
     max-width: 100%;
+  }
+
+  /* §4c follow-up (this same day, later): §4c's column direction and 92px
+     artwork shipped unscoped -- a phone layout at every width, which left
+     most of a desktop card empty (worst on the opener: no explanation to
+     fill a single column that wide). Scoped here, mobile only, where it
+     was actually correct all along. */
+  .rec-row,
+  .opener-record {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  /* 92px, top left, its own row -- up from 56px (rec/hunt) / 48px
+     (opener). flex-shrink: 0 and align-self: flex-start are
+     belt-and-suspenders: a fixed width/height already keeps stretch (the
+     column's default cross-axis behaviour) from resizing this, but
+     stating the intent directly is cheaper than relying on that fallback
+     being obvious to the next reader. */
+  .rec-row-artwork,
+  .rec-row-artwork-hunt,
+  .opener-record-art {
+    width: 92px;
+    height: 92px;
+    flex-shrink: 0;
+    align-self: flex-start;
   }
 
   /* §4c follow-up: the four-control fill the unification spec called for
@@ -779,13 +842,10 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   max-width: 560px;
 }
 
-/* §4c: column, same geometry as .rec-row (see its own comment above) --
-   the opener moves from 52px beside the text to 92px above it, same as
-   the other two card types. */
+/* Same base-vs-breakpoint split as .rec-row above: element order (§4c) is
+   width-independent and stays here always; layout direction and artwork
+   size are not, and live in the two media queries below now. */
 .opener-record {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
   padding: 10px 12px;
   border: 1px solid #2c2f3a;
   border-radius: 10px;
@@ -794,10 +854,6 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
 }
 
 .opener-record-art {
-  width: 92px;
-  height: 92px;
-  flex-shrink: 0;
-  align-self: flex-start;
   border-radius: 5px;
   object-fit: cover;
   display: block;
@@ -838,15 +894,14 @@ h1, h2, h3, p, label, .moment-form-card, .chat-message {
   color: #71747f;
 }
 
-/* §4c: full-width, natural DOM order, same as .rec-row-actions -- see that
-   rule's own comment for why this is the permanent geometry at every
-   width now rather than a mobile-only treatment. */
+/* Reverted to exactly what this was before 07 Sep 2026 -- see
+   .rec-row-actions's own comment; same fix, same reasoning, recovered
+   from the same commit. */
 .opener-record-actions {
-  width: 100%;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 0;
+  gap: 6px;
 }
 
 .opener-record-play {
@@ -1240,17 +1295,11 @@ body {
    error state, which is exactly the wrong register. Only the artwork slot
    and the added line are distinct. */
 
-/* §4c: 92px, matching .rec-row-artwork/.opener-record-art -- .hunt-chart
-   below sizes itself to 74% of whichever box it's actually in, so it scales
-   up proportionally with no change of its own needed. width/height override
-   the shared .rec-row-artwork rule's own 92px (redundant in value, kept
-   explicit since this element is a div, not the img that rule mainly
-   targets, and flex-shrink/align-self still need restating for it). */
+/* Size is set per breakpoint now (56px desktop, 92px mobile -- see the base
+   .rec-row-artwork comment and the two media queries below); .hunt-chart
+   below sizes itself to 74% of whichever box it's actually in, so it
+   scales with either without any change of its own needed. */
 .rec-row-artwork-hunt {
-  width: 92px;
-  height: 92px;
-  flex-shrink: 0;
-  align-self: flex-start;
   border-radius: 2px;
   border: 1px solid rgba(0, 0, 0, 0.18);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
@@ -1668,21 +1717,11 @@ body {
   padding-bottom: 15px;
 }
 
-/* DISTANT is a tag, not a type (D-022): far in language, geography, or era,
-   but still carrying a real connection underneath.
-   Brief N, N-3: the outlined-stamp treatment was still a full pill at the
-   same size as the connection-type pill next to it, so SAME TRICK and FAR
-   SIGNAL read as two types, and the outline distinction disappeared on a
-   phone. No border, no box, smaller -- an annotation on the pill beside it
-   rather than a peer. */
-.rec-pill-distant {
-  background: transparent;
-  border: none;
-  color: #6f6a5c;
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
-  padding: 3px 0 3px 2px;
-}
+/* .rec-pill-distant removed: the "Far signal" label is gone from the
+   render path entirely (RecommendationCard.jsx), not hidden by CSS at any
+   width. rec.distant itself is untouched -- still feeds ranking,
+   filtering, and logs -- this only removed a label with no definition and
+   no way to get one, deferred to the tap-to-define work in P2. */
 
 /* ===========================================================================
    INPUT TRACK CARD
@@ -2075,20 +2114,9 @@ body {
   white-space: nowrap;
 }
 
-/* §4b, same principle as N-3 (.rec-pill-distant): distant is a modifier on
-   the pill beside it, not a second type, so it does not compete with it for
-   the same visual weight. No box, no background -- subordinate text next to
-   the real pill, not a peer of it. #6f6a5c matches N-3's own choice on the
-   card itself, for the same muted-caption role. */
-.crate-pill-distant {
-  background: transparent;
-  color: #6f6a5c;
-  font-size: 7.5px;
-  font-weight: 400;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
+/* .crate-pill-distant removed: same removal, same reasoning, as
+   .rec-pill-distant above -- item.distant is untouched, only the label is
+   gone, from the render path (CratePanel.jsx) not just CSS. */
 
 .crate-pill-hunt {
   font-style: italic;

@@ -194,11 +194,15 @@ export default function RecommendationCard({
         <div className="rec-stamp">
           <span className="rec-row-meta">{metaLine}</span>
           <div className="rec-stamp-tag">
+            {/* No distant/"Far signal" label here (removed, not hidden --
+                see .rec-pill-distant's removal in riff-radar.css). It marks
+                something real (rec.distant itself is untouched, still
+                feeds ranking/filtering/logs) but had no definition and no
+                way to get one, and on this shared facts line it read as a
+                second tag competing with the connection type for the same
+                slot. Exactly one tag per card until the tap-to-define
+                treatment it actually needs lands (deferred, P2). */}
             {label && <span className="rec-pill">{label}</span>}
-            {/* DISTANT is a tag, never a type: far in language, geography, or
-                era, but still carrying a real connection underneath. Display
-                string only (K5a) -- rec.distant itself is unchanged. */}
-            {rec.distant && <span className="rec-pill-distant">Far signal</span>}
           </div>
         </div>
 

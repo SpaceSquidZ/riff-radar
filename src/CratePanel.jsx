@@ -332,13 +332,15 @@ export default function CratePanel({
 
                     <div className="crate-item-body">
                       <div className="crate-item-header">
+                        {/* No distant/"Far signal" label here (removed, not
+                            hidden -- see .crate-pill-distant's removal in
+                            riff-radar.css). item.distant itself is
+                            untouched; this is a label removal, not a data
+                            removal. Exactly one tag per row until the
+                            tap-to-define treatment distant actually needs
+                            lands (deferred, P2). */}
                         {item.isHunt && <span className="crate-pill crate-pill-hunt">Worth the dig</span>}
                         {label && <span className="crate-pill">{label}</span>}
-                        {/* §4b, same principle as N-3: distant is a modifier
-                            on the pill beside it, not a second type -- an
-                            unboxed annotation, not a second full crate-pill
-                            competing with the first for the same row. */}
-                        {item.distant && <span className="crate-pill-distant">Far signal</span>}
                       </div>
                       <p className="crate-item-title">{item.track}</p>
                       <p className="crate-item-artist">{item.artist}</p>
