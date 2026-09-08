@@ -79,6 +79,16 @@ export default function App() {
   // guard distinguish "the panel never mounted" from "it mounted and is
   // just open," which a flat timer alone cannot do.
   const consentPanelMountedRef = useRef(false);
+  // 08 Sep 2026 bug fix. Mirrors consentOpen for the 8s backstop below,
+  // which runs inside a mount-once ([]) effect -- reading consentOpen
+  // directly there would close over its value at mount time and never see
+  // a later dismissal, exactly the kind of stale-closure bug that would
+  // make the backstop either too eager (never seeing a real dismissal) or
+  // too timid. A ref always reads current.
+  const consentOpenRef = useRef(consentOpen);
+  useEffect(() => {
+    consentOpenRef.current = consentOpen;
+  }, [consentOpen]);
 
   // Roadmap v2 Wave 2 item 8 / Milestone 1 DoD: conversation persistence
   // across refresh (see conversationPersistence.js). Read once, lazily, on
@@ -281,14 +291,39 @@ export default function App() {
   // §4a's own guard, in addition to the one above: "it must never be
   // possible to reach a state where the screen stays black and nothing
   // happens." The consent-mount guard covers the one realistic failure
-  // (ConsentPanel never rendering); this is a second, unconditional net for
-  // any failure mode neither of us has thought of -- if the opening
-  // sequence hasn't lifted the black field on its own within 8s (roughly
-  // double the ~3.5s label sequence plus room for a slow first bubble),
-  // force it down regardless of what else did or didn't run. Never fires
-  // under normal conditions; only ever a backstop.
+  // (ConsentPanel never rendering); this is a second net for any failure
+  // mode neither of us has thought of -- if the opening sequence hasn't
+  // lifted the black field on its own within 8s (roughly double the ~3.5s
+  // label sequence plus room for a slow first bubble), force it down.
+  //
+  // SCOPED, not unconditional (08 Sep 2026 bug fix). BUG THIS FIXES: this
+  // used to fire no matter what, which meant a visitor who was still
+  // genuinely reading the consent panel at the 8s mark had it yanked out
+  // from under them mid-read -- unmounted along with the rest of
+  // .opener-black-field, with no Accept/Decline/Escape ever having fired,
+  // so markConsentSeen() never ran. Confirmed live: at 8.6s with the panel
+  // untouched, both riff_radar_consent_seen and riff_radar_consent_declined
+  // stayed null, and the panel reappeared on reload -- a notice that can
+  // vanish without a choice, while emit() downstream only gates on
+  // hasDeclinedConsent(), so logging proceeded all session as if consent
+  // had been given.
+  //
+  // The rescue this guards against is a screen stuck on black with the
+  // panel never having rendered (or having rendered and already resolved,
+  // then something else downstream stalling) -- not a panel that is
+  // visibly on screen being read. So this now only forces the field down
+  // when the panel is ABSENT: never mounted at all (the actual render
+  // failure this exists for), or mounted and already dismissed. If it is
+  // mounted and still open at the 8s mark, that's a real visitor mid-read,
+  // not the failure this backstop exists to catch, and this does nothing --
+  // the normal path (handleConsentDismiss -> the opener-sequence effect)
+  // lifts the field a few seconds after WHATEVER moment they actually
+  // dismiss it, however late that is.
   useEffect(() => {
-    const timer = setTimeout(() => setOpeningSequenceActive(false), 8000);
+    const timer = setTimeout(() => {
+      if (consentPanelMountedRef.current && consentOpenRef.current) return;
+      setOpeningSequenceActive(false);
+    }, 8000);
     return () => clearTimeout(timer);
   }, []);
 
