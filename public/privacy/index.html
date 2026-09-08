@@ -10,22 +10,106 @@
   </style>
 </head>
 <body>
-  <h1>What Riff Radar collects</h1>
+  <h1>What Riff Radar does with your data</h1>
 
-  <p>Riff Radar logs the following to improve your experience:</p>
+  <p>Riff Radar is an independent project, not a company. This page is the whole of it.</p>
+
+  <h2>What gets stored</h2>
+
+  <p>Riff Radar records what happened in a session, not what you said.</p>
   <ul>
-    <li>Which songs you bring to Groove (title and artist)</li>
-    <li>The timestamps or moments you mark</li>
-    <li>Whether you clicked through to a music streaming service</li>
-    <li>Basic session activity — messages exchanged, recommendations generated</li>
+    <li>How long each message was, in characters, but never what it said</li>
+    <li>Song titles and artist names you bring up or correct</li>
+    <li>Which recommendations you were shown, and whether you saved one, played a preview, or clicked through to a music service</li>
+    <li>Whether you told Groove a track was new to you</li>
   </ul>
 
-  <p>Riff Radar does not collect the actual words you write to Groove, or any personal information.</p>
+  <p>Your messages are never stored. There is no field in the database that holds them.</p>
 
-  <p>This data is never sold or shared with advertisers.</p>
+  <p>I read these records myself to work out whether the thing is any good. That is what they are for.</p>
 
-  <p>Questions? This is an independent project by Jackie, a Northwestern Medill student. More detail coming soon.</p>
+  <h2>What gets sent, and to whom</h2>
+
+  <p>To reply to you, Riff Radar sends your conversation to Anthropic, whose Claude model writes Groove's side of it. The full conversation so far goes with every turn, because that is how the model knows what you have been talking about. Anthropic handles it under their own terms.</p>
+
+  <p>To find music and check that it is real, Riff Radar also sends:</p>
+  <ul>
+    <li>Artist names to Last.fm, to find related artists</li>
+    <li>Song titles and artist names to Apple, to confirm a track exists and to fetch artwork and previews</li>
+    <li>Artist names, and sometimes song titles, to MusicBrainz, to confirm a record exists</li>
+  </ul>
+
+  <p>None of those four receive anything you write.</p>
+
+  <p>Riff Radar runs on Vercel and keeps its records with Supabase. Both process this data as service providers, and both keep their own short-lived server logs the way any host does.</p>
+
+  <h2>How you are recognised</h2>
+
+  <p>There are no accounts. Riff Radar never asks for your name, your email, or anything about you, and it has no way to find out.</p>
+
+  <p>It does store two random identifiers in your browser so that if you come back, it knows you are the same visitor. These last across days, not just for one visit — that is deliberate, and it is what lets the conversation build over time instead of starting from nothing each session.</p>
+
+  <p>They are random. They are not linked to anything that identifies you. They live in your browser, so clearing your browser storage removes them and you return as someone new.</p>
+
+  <h2>How long it is kept</h2>
+
+  <p>Activity records are kept for as long as Riff Radar runs. They contain no messages and nothing that identifies you.</p>
+
+  <p>Clearing your browser storage removes the two identifiers, which detaches you from anything recorded afterwards. If you want records already stored deleted, email me the identifier below and I will delete them.</p>
+
+  <!-- Honouring a deletion request, checked against the schema on 09 Sep
+       2026 (see the verification report that produced this page). session_id
+       is a column on every row in `events` -- client events (emit(), in
+       App.jsx) and every server-side event (message_sent,
+       itunes_validation_failed, etc., logged via logEventSafe in
+       api/chat.js) all key on it. visitor_id is NOT a column; it only lives
+       inside payload, and only on client-originated events -- server-side
+       rows like message_sent never carry it.
+
+       If they send a session_id: delete from events where session_id = '...'
+       This alone is complete for that one session_id.
+
+       If they send a visitor_id (shown here only when session_id happens to
+       be missing): resolve it to every session_id it has ever been paired
+       with, then delete each of those as above --
+         select distinct session_id from events where payload->>'visitor_id' = '...';
+         -- then, for each session_id returned:
+         delete from events where session_id = '...';
+       This is MORE complete than deleting by a single session_id: it
+       catches every session that browser has held, not just the one whose
+       id happened to be sent. -->
+  <p>Your identifier: <span id="visitor-identifier">…</span></p>
+
+  <h2>What does not happen</h2>
+
+  <p>Nothing is sold. Nothing is shared with advertisers. Nothing you type is used to train a model.</p>
+
+  <h2>Questions</h2>
+
+  <p>Riff Radar is built by Jackie, a graduate student at Northwestern's Medill School. You can reach me at riffradar.fm@gmail.com.</p>
+
+  <p>If you would rather Riff Radar recorded nothing, choose No thanks on the notice when you arrive, or clear your browser storage at any time.</p>
+
+  <p>Last updated 9 September 2026.</p>
 
   <p><a href="/">Back to Riff Radar</a></p>
+
+  <script>
+    (function () {
+      var el = document.getElementById('visitor-identifier');
+      if (!el) return;
+      var fallback = 'nothing here means this browser has no records';
+      try {
+        var sessionId = window.localStorage.getItem('riff_radar_session_id');
+        var visitorId = window.localStorage.getItem('rr_visitor_id');
+        el.textContent = sessionId || visitorId || fallback;
+      } catch (err) {
+        // Private windows and storage-blocking browsers throw on any
+        // localStorage access at all. Degrade quietly -- a privacy page is
+        // the worst possible place to show a visible error.
+        el.textContent = fallback;
+      }
+    })();
+  </script>
 </body>
 </html>
