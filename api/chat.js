@@ -1404,10 +1404,23 @@ export default async function handler(req, res) {
           sessionId,
           'itunes_validation_failed',
           {
+            // Store-routing probe follow-up (09/14). Telemetry only, no
+            // behaviour change -- region and language_hint feed storesFor()
+            // in validateTracks.js but were never persisted anywhere, which
+            // made the store-routing probe's own historical replay unable
+            // to reconstruct which stores production actually searched for
+            // a given failed pair. region is per-candidate (Groove's own
+            // rec.region, verbatim -- may be null if Groove left it empty,
+            // which is itself the thing worth measuring: a hint the model
+            // never populates does nothing regardless of table coverage).
+            // language_hint is per-TURN, not per-candidate, so it sits at
+            // the top level rather than inside each failed_tracks entry.
+            language_hint: languageHint || null,
             failed_tracks: failed.map((r) => ({
               track: r.track,
               artist: r.artist,
               reason: r.itunesValidation,
+              region: r.region ?? null,
               ...(r.itunesValidation === 'misattributed'
                 ? { misattributed_artist: r.misattributedArtist }
                 : {}),
@@ -1440,6 +1453,13 @@ export default async function handler(req, res) {
               tier: rec.tier,
               distant: !!rec.distant,
               rank: rec._rank,
+              // Store-routing probe follow-up (09/14), same telemetry-only
+              // addition as itunes_validation_failed above -- this is the
+              // successful-validation counterpart. rec_shown already fires
+              // one event per track, so both are simple top-level fields
+              // here rather than needing an array like failed_tracks does.
+              region: rec.region ?? null,
+              language_hint: languageHint || null,
             },
             isTester
           );
