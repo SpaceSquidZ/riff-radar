@@ -1,3 +1,5 @@
+Copyright (c) 2026 Qijun Zhong. All rights reserved. This code is shared for portfolio and interview review purposes only. No permission is granted to copy, reuse, modify, or distribute this code.
+
 # React + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
